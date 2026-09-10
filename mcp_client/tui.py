@@ -16,8 +16,11 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.suggester import SuggestFromList
-from textual.widgets import Input, LoadingIndicator, OptionList, RichLog, Static
+from textual.widgets import (
+    Input, LoadingIndicator, OptionList, RichLog, SelectionList, Static,
+)
 from textual.widgets.option_list import Option
+from textual.widgets.selection_list import Selection
 
 from .chat import ChatError, ChatSession, is_risky_tool
 from .servers import ServerManager
@@ -117,6 +120,42 @@ class ModelScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class McpScreen(ModalScreen[list[str] | None]):
+    """Multi-select picker for connecting/disconnecting MCP servers.
+
+    Returns the names that should end up connected, or None on cancel.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+        # priority: SelectionList (via OptionList) also binds enter to toggle
+        Binding("enter", "confirm", "apply", priority=True),
+    ]
+
+    def __init__(self, rows: list[tuple[str, str, bool]]) -> None:
+        super().__init__()
+        self._rows = rows  # (name, label, connected)
+
+    def compose(self) -> ComposeResult:
+        with Container(id="mcp-box"):
+            yield Static(Text("Manage MCP servers", style="bold"))
+            yield Static(Text("Space to toggle  ·  Enter to apply  ·  "
+                              "Esc to cancel", style="dim"))
+            yield SelectionList[str](*(
+                Selection(label, name, connected)
+                for name, label, connected in self._rows
+            ), id="mcp-list")
+
+    def on_mount(self) -> None:
+        self.query_one(SelectionList).focus()
+
+    def action_confirm(self) -> None:
+        self.dismiss(list(self.query_one(SelectionList).selected))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 def _make_confirm(app: "ManishcodeApp", mode: str):
     if mode == "none":
         return None
@@ -151,6 +190,10 @@ class ManishcodeApp(App):
     #model-box { width: 70%; max-width: 90; height: auto; max-height: 80%;
                  padding: 1 2; background: $panel; border: round $accent; }
     #model-list { height: auto; max-height: 20; background: $panel; }
+    McpScreen { align: center middle; background: $background 60%; }
+    #mcp-box { width: 70%; max-width: 90; height: auto; max-height: 80%;
+               padding: 1 2; background: $panel; border: round $accent; }
+    #mcp-list { height: auto; max-height: 20; background: $panel; }
     """
     BINDINGS = [
         Binding("ctrl+c", "quit", "quit", priority=True),
@@ -318,7 +361,10 @@ class ManishcodeApp(App):
         elif cmd == "/model":
             await self._model(parts)
         elif cmd == "/mcp":
-            await self._mcp(parts)
+            if len(parts) == 1:
+                await self._mcp_picker()
+            else:
+                await self._mcp(parts)
         else:
             log.write(Text(f"unknown command {cmd!r} — /help for the list",
                            style="red"))
@@ -370,6 +416,33 @@ class ManishcodeApp(App):
             return
         log.write(Text("usage: /model | /model NAME | /model pull NAME",
                        style="red"))
+
+    async def _mcp_picker(self) -> None:
+        log = self.query_one(RichLog)
+        connected = {c.spec.name: c for c in self.manager.connections}
+        names = sorted(set(self.all_specs) | set(connected))
+        if not names:
+            log.write(Text("no servers in config", style="dim"))
+            return
+        rows = []
+        for n in names:
+            spec = self.all_specs.get(n)
+            if n in connected:
+                label = f"{n}  ({len(connected[n].tool_names)} tools)"
+            elif spec and spec.missing_env:
+                label = f"{n}  (needs env: {', '.join(spec.missing_env)})"
+            else:
+                label = n
+            rows.append((n, label, n in connected))
+
+        want = await self.push_screen_wait(McpScreen(rows))
+        if want is None:
+            return
+        want, have = set(want), set(connected)
+        for n in sorted(want - have):
+            await self._mcp(["/mcp", "connect", n])
+        for n in sorted(have - want):
+            await self._mcp(["/mcp", "disconnect", n])
 
     async def _mcp(self, parts: list[str]) -> None:
         log = self.query_one(RichLog)
