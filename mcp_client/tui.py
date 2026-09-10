@@ -307,6 +307,19 @@ class ManishcodeApp(App):
             except Exception as e:  # noqa: BLE001
                 log.write(Text(f"  err  {e}", style="red"))
             self._refresh_status()
+        elif action in ("connect", "disconnect"):
+            connected = {c.spec.name for c in self.manager.connections}
+            if action == "connect":
+                choices = sorted(n for n in self.all_specs if n not in connected)
+                hint = "connect" if choices else None
+            else:
+                choices = sorted(connected)
+                hint = "disconnect" if choices else None
+            if hint:
+                log.write(Text(f"  /mcp {hint} NAME  —  "
+                               + ", ".join(choices), style="dim"))
+            else:
+                log.write(Text(f"nothing to {action}", style="dim"))
         else:
             log.write(Text(
                 "usage: /mcp [list] | /mcp connect NAME | /mcp disconnect NAME",

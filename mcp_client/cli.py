@@ -488,6 +488,16 @@ async def _handle_mcp(user_input: str, manager, all_specs: dict) -> None:
             print(f"  disconnected {name!r}")
         except Exception as e:  # noqa: BLE001
             print(f"  [error] {e}")
+    elif action in ("connect", "disconnect"):
+        connected = {c.spec.name for c in manager.connections}
+        if action == "connect":
+            choices = sorted(n for n in all_specs if n not in connected)
+        else:
+            choices = sorted(connected)
+        if choices:
+            print(f"  /mcp {action} NAME  ->  {', '.join(choices)}")
+        else:
+            print(f"  nothing to {action}")
     else:
         print("usage: /mcp [list]  |  /mcp connect NAME  |  /mcp disconnect NAME")
 
