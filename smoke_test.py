@@ -106,6 +106,22 @@ async def test_config(tmp: Path) -> None:
                   ("search", "read_text_file", "list_directory", "get_thread")))
 
 
+async def test_ui() -> None:
+    print("\n== console UI ==")
+    from mcp_client.ui import PlainUI, RichUI, make_ui
+
+    check("make_ui returns PlainUI when piped (not a tty)",
+          isinstance(make_ui(), PlainUI))
+    check("make_ui(plain=True) is PlainUI", type(make_ui(plain=True)) is PlainUI)
+    # RichUI must render literal bracket text without choking on it as markup
+    try:
+        RichUI().info("[context] 40 tokens [!] full")
+        RichUI().assistant("**bold** and a list\n- a\n- b")
+        check("RichUI renders bracketed / markdown text", True)
+    except Exception as e:  # noqa: BLE001
+        check("RichUI renders bracketed / markdown text", False, repr(e))
+
+
 async def test_no_tools() -> None:
     print("\n== --no-tools / empty ServerManager ==")
     async with ServerManager([]) as mgr:
@@ -275,6 +291,7 @@ async def main() -> int:
     with tempfile.TemporaryDirectory(prefix="mcp_smoke_") as td:
         tmp = Path(td)
         await test_config(tmp)
+        await test_ui()
         await test_no_tools()
         await test_routing(tmp)
         await test_runtime_connect(tmp)

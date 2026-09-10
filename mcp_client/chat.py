@@ -6,6 +6,7 @@ import ollama
 
 from .debug import debug, is_debug
 from .servers import ServerManager, ToolCallError
+from .ui import PlainUI
 
 MAX_TOOL_ROUNDS = 25  # guard against a model that loops forever on tools
 DEFAULT_MAX_TOOL_RESULT = 8000  # chars of a tool result fed to the model (0 = unlimited)
@@ -98,10 +99,12 @@ class ChatSession:
         max_tool_result: int = DEFAULT_MAX_TOOL_RESULT,
         system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
         confirm=None,
+        ui=None,
     ):
         self.manager = manager
         self.model = model
         self.think = think
+        self.ui = ui or PlainUI()
         # confirm(name, args) -> awaitable[bool]; return False to skip the call.
         self._confirm = confirm
         self.max_tool_result = max_tool_result
@@ -153,7 +156,8 @@ class ChatSession:
         self._changed()
 
         for _ in range(MAX_TOOL_ROUNDS):
-            msg = self._chat_once()
+            with self.ui.thinking():
+                msg = self._chat_once()
             self.messages.append(msg)
 
             tool_calls = msg.get("tool_calls") or []
@@ -165,7 +169,7 @@ class ChatSession:
                 name = call["function"]["name"]
                 args = call["function"]["arguments"] or {}
                 if not is_debug():
-                    print(f"  [tool] {name}({_short(args)})")
+                    self.ui.tool_call(name, _short(args))
 
                 if self._confirm is not None:
                     try:
@@ -173,7 +177,7 @@ class ChatSession:
                     except (EOFError, KeyboardInterrupt):
                         approved = False
                     if not approved:
-                        print(f"  [tool] {name} skipped (declined)")
+                        self.ui.tool_note(f"{name} skipped (declined)")
                         self.messages.append({
                             "role": "tool",
                             "name": name,
@@ -190,12 +194,12 @@ class ChatSession:
                 except ToolCallError as e:
                     result_text = f"ERROR: {e}"
                     status = "error"
-                    print(f"  [tool error] {e}")
+                    self.ui.tool_error(str(e))
 
                 capped, dropped = _cap_tool_result(result_text, self.max_tool_result)
                 if dropped:
-                    print(
-                        f"  [tool] {name} result trimmed "
+                    self.ui.tool_note(
+                        f"{name} result trimmed "
                         f"{len(result_text)} -> {self.max_tool_result} chars "
                         f"(raise with --max-tool-result, 0 = off)"
                     )
@@ -203,7 +207,7 @@ class ChatSession:
                     {"role": "tool", "name": name, "content": capped}
                 )
                 if not is_debug() and status == "ok":
-                    print(f"  [tool] {name} -> {_short(result_text)}")
+                    self.ui.tool_result(name, _short(result_text))
             self._changed()
 
         note = "(stopped: too many tool rounds without a final answer)"

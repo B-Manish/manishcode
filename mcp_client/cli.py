@@ -27,6 +27,7 @@ from .config import (
 from .debug import set_debug
 from .history import load_history, save_history
 from .servers import ServerManager
+from .ui import make_ui
 
 try:
     from prompt_toolkit import PromptSession
@@ -117,6 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="enable the model's thinking/reasoning mode",
     )
     p.add_argument("--debug", action="store_true", help="print full tool-call JSON")
+    p.add_argument(
+        "--plain",
+        action="store_true",
+        help="disable the styled (colour/markdown) output and use plain text",
+    )
     p.add_argument(
         "--context",
         type=int,
@@ -221,6 +227,7 @@ def _make_confirm(mode: str):
 
 async def run(args) -> int:
     set_debug(args.debug)
+    ui = make_ui(plain=args.plain or args.debug)
 
     if args.list_servers:
         cfg_path = find_config(args.config)
@@ -278,16 +285,16 @@ async def run(args) -> int:
                 max_tool_result=args.max_tool_result,
                 confirm=confirm_cb,
                 system_prompt=None if args.no_tools else DEFAULT_SYSTEM_PROMPT,
+                ui=ui,
             )
         except ChatError as e:
             print(f"\nERROR: {e}")
             return None
-        print(
-            f"\nModel: {args.model}  think={args.think}  debug={args.debug}  "
-            f"max-tool-result={args.max_tool_result or 'unlimited'}  "
-            f"confirm-tools={args.confirm_tools}  context={args.context:,}\n"
-            "Type your message, or / for the list of commands.\n"
+        ui.rule(
+            f"{args.model}  think={args.think}  "
+            f"confirm-tools={args.confirm_tools}  context={args.context:,}"
         )
+        ui.info("Type your message, or / for the list of commands.")
         return sess
 
     try:
@@ -296,7 +303,7 @@ async def run(args) -> int:
             if session is None:
                 return 1
             await chat_repl(session, manager, history_path, args.model,
-                            context_limit=args.context, all_specs=all_specs)
+                            context_limit=args.context, all_specs=all_specs, ui=ui)
     except RuntimeError as e:
         print(f"\nERROR: {e}")
         return 1
@@ -456,8 +463,9 @@ async def _handle_mcp(user_input: str, manager, all_specs: dict) -> None:
 
 
 async def chat_repl(session: ChatSession, manager: ServerManager, history_path, model,
-                    context_limit: int = 0, all_specs: dict | None = None):
+                    context_limit: int = 0, all_specs: dict | None = None, ui=None):
     all_specs = all_specs or {}
+    ui = ui or make_ui(plain=True)
     read = _make_reader()
     while True:
         try:
@@ -502,19 +510,20 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
             print(f"unknown command {cmd!r}. Type / for the list.")
             continue
 
+        ui.user_turn(user_input)
         try:
             answer = await session.send(user_input)
         except ChatError as e:
-            print(f"\n[chat error] {e}\nYou can keep going or /quit.\n")
+            ui.warn(f"[chat error] {e}  -  you can keep going or /quit")
             continue
 
-        print(f"\n{answer}\n")
-        print(_context_line(session, context_limit))
+        ui.assistant(answer)
+        ui.info(_context_line(session, context_limit))
 
         dead = await manager.health_check()
         if dead:
-            print(f"[warn] server(s) not responding: {', '.join(dead)}. "
-                  "Their tools may fail until you restart.\n")
+            ui.warn(f"[warn] server(s) not responding: {', '.join(dead)}. "
+                    "Their tools may fail until you restart.")
 
 
 def main() -> None:

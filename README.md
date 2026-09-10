@@ -13,6 +13,10 @@ No cloud LLM involved. Installed command: **`manishcode`**.
    calls it requests are routed to the owning server, results are fed back, and
    it repeats until the model gives a final text answer.
 
+On a real terminal the output is styled (coloured role rules, markdown answers,
+tool calls as compact blocks, a spinner while the model thinks). Piped or with
+`--plain` / `--debug` it's plain line-oriented text.
+
 ## Setup
 
 ### Requirements (every machine)
@@ -87,7 +91,8 @@ uv run python smoke_test.py
 | `--server-cmd "CMD"` | Launch a server by raw command, ignoring the config. Repeatable. |
 | `--model NAME` | Ollama model to use (default `qwen3:8b`). |
 | `--think` | Enable the model's thinking/reasoning mode. |
-| `--debug` | Print the full JSON of every Ollama request/response and tool call/result. |
+| `--debug` | Print the full JSON of every Ollama request/response and tool call/result. Implies `--plain`. |
+| `--plain` | Turn off the styled output (colour, markdown answers, spinner) and use plain text. Auto-on when output isn't a terminal (piped, CI). |
 | `--confirm-tools MODE` | Ask for `y/N` before a tool call runs. `risky` (default) prompts only for side-effecting tools (send mail, trash, write/move files, …); `all` prompts for every call; `none` never prompts. Piped/non-interactive input counts as "no". |
 | `--context TOKENS` | Effective Ollama context window, used only to print a "context used" percentage after each turn (default: `$OLLAMA_CONTEXT_LENGTH` or 4096). Set it to whatever you started `ollama serve` with. |
 | `--max-tool-result CHARS` | Trim any single tool result to this many chars before sending it to the model, so one big file (a 33 KB README, a directory tree, an API dump) can't overflow a small local context window. Default 8000; `0` = unlimited. `--debug` still logs the full result. |
@@ -408,5 +413,6 @@ mcp_client/
   servers.py   ServerManager: one task per server, tool merging + routing
   chat.py      ChatSession: the Ollama <-> tools loop
   history.py   save/load conversation JSON
+  ui.py        PlainUI / RichUI console output
   debug.py     --debug logging
 ```
