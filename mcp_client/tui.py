@@ -1,0 +1,300 @@
+"""Full-screen Textual UI for manishcode.
+
+Used for an interactive terminal session. Piped input, ``--plain`` and
+``--debug`` keep the line-oriented REPL in :mod:`mcp_client.cli` instead.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from rich.markdown import Markdown
+from rich.rule import Rule
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.screen import ModalScreen
+from textual.suggester import SuggestFromList
+from textual.widgets import Input, RichLog, Static
+
+from .chat import ChatError, ChatSession, is_risky_tool
+from .servers import ServerManager
+from .ui import TuiUI, context_line
+
+BANNER = r"""
+ █▀▄▀█ █▀█ █▄ █ █ █▀ █ █ █▀▀ █▀█ █▀▄ █▀▀
+ █ ▀ █ █▀█ █ ▀█ █ ▄█ █▀█ █▄▄ █▄█ █▄▀ ██▄
+""".strip("\n")
+
+COMMANDS: list[tuple[str, str]] = [
+    ("/help", "show this list"),
+    ("/new", "start a fresh conversation"),
+    ("/tools", "list connected tools"),
+    ("/mcp", "list servers; /mcp connect NAME | /mcp disconnect NAME"),
+    ("/context", "show token usage"),
+    ("/save FILE", "write the conversation to a file"),
+    ("/quit", "leave"),
+]
+_SUGGEST = SuggestFromList(
+    ["/help", "/new", "/reset", "/clear", "/tools", "/mcp", "/mcp connect ",
+     "/mcp disconnect ", "/context", "/save ", "/quit", "/exit"],
+    case_sensitive=False,
+)
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """y/N modal shown before a side-effecting tool call runs."""
+
+    BINDINGS = [
+        Binding("y", "confirm(True)", "run"),
+        Binding("n,escape", "confirm(False)", "skip"),
+    ]
+
+    def __init__(self, prompt: str) -> None:
+        super().__init__()
+        self._prompt = prompt
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            Text.assemble(("confirm  ", "bold yellow"), (self._prompt, "")),
+            id="confirm-box",
+        )
+        yield Static(Text("y  run      n  skip", style="dim"), id="confirm-hint")
+
+    def action_confirm(self, ok: bool) -> None:
+        self.dismiss(ok)
+
+
+def _make_confirm(app: "ManishcodeApp", mode: str):
+    if mode == "none":
+        return None
+
+    async def confirm(name: str, tool_args: dict) -> bool:
+        if mode == "risky" and not is_risky_tool(name):
+            return True
+        preview = str(tool_args)
+        if len(preview) > 200:
+            preview = preview[:200] + "…"
+        return bool(await app.push_screen_wait(
+            ConfirmScreen(f"run {name}({preview}) ?")))
+
+    return confirm
+
+
+class ManishcodeApp(App):
+    CSS = """
+    Screen { layout: vertical; background: $surface; }
+    #log { height: 1fr; padding: 0 1; background: $surface; scrollbar-size-vertical: 1; }
+    #status { dock: bottom; height: 1; padding: 0 1; background: $panel; color: $text-muted; }
+    #prompt { dock: bottom; border: round $primary; margin: 0 1; background: $panel; }
+    #prompt:focus { border: round $accent; }
+    ConfirmScreen { align: center middle; background: $background 60%; }
+    #confirm-box { width: 70%; max-width: 90; padding: 1 2; background: $panel;
+                   border: round $warning; }
+    #confirm-hint { width: 70%; max-width: 90; padding: 0 2; }
+    """
+    BINDINGS = [
+        Binding("ctrl+c", "quit", "quit", priority=True),
+        Binding("ctrl+q", "quit", "quit"),
+    ]
+
+    def __init__(self, *, session: ChatSession, manager: ServerManager,
+                 all_specs: dict, context_limit: int, history_path, model: str,
+                 confirm_mode: str) -> None:
+        super().__init__()
+        self.session = session
+        self.session.ui = TuiUI(self)
+        self.manager = manager
+        self.all_specs = all_specs or {}
+        self.context_limit = context_limit
+        self.history_path = history_path
+        self.model = model
+        self._confirm_mode = confirm_mode
+        self._working = False
+
+    # ---------------------------------------------------------------- layout
+    def compose(self) -> ComposeResult:
+        yield RichLog(id="log", wrap=True, markup=False, highlight=False, min_width=20)
+        yield Static("", id="status")
+        yield Input(id="prompt",
+                    placeholder="Message the model, or / for commands",
+                    suggester=_SUGGEST)
+
+    def on_mount(self) -> None:
+        self.session._confirm = _make_confirm(self, self._confirm_mode)
+        log = self.query_one(RichLog)
+        log.write(Text(BANNER, style="bold cyan"))
+        log.write(Text(
+            f"  {self.model}  ·  {len(self.manager.ollama_tools)} tools  "
+            f"·  / for commands, ctrl+c to quit\n", style="dim"))
+        self._refresh_status()
+        self.query_one(Input).focus()
+
+    # ------------------------------------------------- hooks used by TuiUI
+    def tui_write(self, renderable) -> None:
+        self.query_one(RichLog).write(renderable)
+
+    def tui_assistant(self, text: str) -> None:
+        log = self.query_one(RichLog)
+        log.write(Rule(style="green"))
+        log.write(Markdown(text or "_(no response)_"))
+        log.write(Text(""))
+
+    def tui_set_working(self, working: bool) -> None:
+        self._working = working
+        self._refresh_status()
+
+    # ---------------------------------------------------------- status bar
+    def _refresh_status(self) -> None:
+        conns = getattr(self.manager, "connections", [])
+        servers = ", ".join(c.spec.name for c in conns) or "no servers"
+        line = Text()
+        line.append(f"{self.model}", style="bold")
+        line.append(f"  ·  {servers}")
+        used = self.session.prompt_tokens
+        if used and self.context_limit:
+            pct = used * 100 // self.context_limit
+            line.append(f"  ·  ctx {pct}%",
+                        style="red" if pct >= 90 else
+                        "yellow" if pct >= 75 else "cyan")
+        if self._working:
+            line.append("  ·  working…", style="yellow")
+        line.append(f"   {Path.cwd()}", style="dim")
+        self.query_one("#status", Static).update(line)
+
+    # --------------------------------------------------------------- input
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        text = event.value.strip()
+        self.query_one(Input).value = ""
+        if not text or self._working:
+            return
+        if text.startswith("/"):
+            await self._command(text)
+            return
+        log = self.query_one(RichLog)
+        log.write(Rule(style="cyan"))
+        log.write(Text(text, style="bold cyan"))
+        log.write(Text(""))
+        self.query_one(Input).disabled = True
+        self.run_worker(self._turn(text), exclusive=True, name="turn")
+
+    async def _turn(self, text: str) -> None:
+        try:
+            answer = await self.session.send(text)
+            self.tui_assistant(answer)
+        except ChatError as e:
+            self.tui_write(Text(f"[chat error] {e}  —  keep going or /quit",
+                                style="red"))
+        finally:
+            self._working = False
+            self._refresh_status()
+            inp = self.query_one(Input)
+            inp.disabled = False
+            inp.focus()
+        try:
+            dead = await self.manager.health_check()
+        except Exception:  # noqa: BLE001
+            dead = []
+        if dead:
+            self.tui_write(Text(
+                f"[warn] server(s) not responding: {', '.join(dead)}",
+                style="yellow"))
+
+    # ------------------------------------------------------------ commands
+    async def _command(self, text: str) -> None:
+        log = self.query_one(RichLog)
+        parts = text.split()
+        cmd = parts[0].lower()
+        if cmd in ("/quit", "/exit"):
+            self.exit()
+        elif cmd in ("/help", "/", "/?"):
+            log.write(Text("commands", style="bold"))
+            for name, help_text in COMMANDS:
+                log.write(Text(f"  {name:<14} {help_text}", style="dim"))
+        elif cmd in ("/new", "/reset", "/clear"):
+            self.session.messages[:] = [
+                m for m in self.session.messages
+                if isinstance(m, dict) and m.get("role") == "system"]
+            self.session.prompt_tokens = 0
+            log.write(Text("(new conversation)", style="dim"))
+            self._refresh_status()
+        elif cmd == "/tools":
+            log.write(Text(self.manager.describe_tools(), style="dim"))
+        elif cmd == "/context":
+            log.write(Text(context_line(self.session, self.context_limit),
+                           style="dim"))
+        elif cmd == "/save":
+            from .history import save_history
+            target = (Path(parts[1]).expanduser() if len(parts) > 1
+                      else self.history_path)
+            if not target:
+                log.write(Text("usage: /save FILE", style="red"))
+            else:
+                save_history(target, self.session.messages, self.model)
+                log.write(Text(f"saved to {target}", style="dim"))
+        elif cmd == "/mcp":
+            await self._mcp(parts)
+        else:
+            log.write(Text(f"unknown command {cmd!r} — /help for the list",
+                           style="red"))
+
+    async def _mcp(self, parts: list[str]) -> None:
+        log = self.query_one(RichLog)
+        action = parts[1].lower() if len(parts) > 1 else "list"
+        if action in ("list", "ls", "status"):
+            connected = {c.spec.name: c for c in self.manager.connections}
+            names = sorted(set(self.all_specs) | set(connected))
+            if not names:
+                log.write(Text("no servers in config, none connected", style="dim"))
+            for name in names:
+                if name in connected:
+                    c = connected[name]
+                    tag = f"connected  {len(c.tool_names)} tool(s)"
+                    if not c.alive:
+                        tag += "  [DOWN]"
+                elif self.all_specs.get(name) and self.all_specs[name].missing_env:
+                    tag = f"available  (needs env: {', '.join(self.all_specs[name].missing_env)})"
+                else:
+                    tag = "available"
+                log.write(Text(f"  {name:<16} {tag}", style="dim"))
+            return
+        if action == "connect" and len(parts) == 3:
+            name = parts[2]
+            spec = self.all_specs.get(name)
+            if spec is None:
+                log.write(Text(f"{name!r} not in config", style="red"))
+                return
+            if spec.missing_env:
+                log.write(Text(
+                    f"cannot connect {name!r}: env not set: {', '.join(spec.missing_env)}",
+                    style="red"))
+                return
+            log.write(Text(f"connecting {name!r}…", style="dim"))
+            try:
+                n = await self.manager.connect(spec)
+                log.write(Text(f"  ok  {name}: {n} tool(s) added", style="green"))
+            except Exception as e:  # noqa: BLE001
+                log.write(Text(f"  err  {e}", style="red"))
+            self._refresh_status()
+        elif action == "disconnect" and len(parts) == 3:
+            try:
+                await self.manager.disconnect(parts[2])
+                log.write(Text(f"  disconnected {parts[2]!r}", style="dim"))
+            except Exception as e:  # noqa: BLE001
+                log.write(Text(f"  err  {e}", style="red"))
+            self._refresh_status()
+        else:
+            log.write(Text(
+                "usage: /mcp [list] | /mcp connect NAME | /mcp disconnect NAME",
+                style="red"))
+
+
+async def run_tui(*, session: ChatSession, manager: ServerManager, all_specs: dict,
+                  context_limit: int, history_path, model: str,
+                  confirm_mode: str) -> None:
+    app = ManishcodeApp(
+        session=session, manager=manager, all_specs=all_specs,
+        context_limit=context_limit, history_path=history_path, model=model,
+        confirm_mode=confirm_mode,
+    )
+    await app.run_async()

@@ -27,6 +27,7 @@ from .config import (
 from .debug import set_debug
 from .history import load_history, save_history
 from .servers import ServerManager
+from .ui import context_line as _context_line
 from .ui import make_ui
 
 try:
@@ -272,60 +273,58 @@ async def run(args) -> int:
             except OSError as e:
                 print(f"[warn] could not save history: {e}")
 
-    def start_session(manager) -> ChatSession | None:
-        print(f"\n{len(manager.ollama_tools)} tool(s) available:")
-        print(manager.describe_tools())
+    use_tui = not args.plain and not args.debug
+    try:
+        use_tui = use_tui and sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        use_tui = False
+    if use_tui:
         try:
-            sess = ChatSession(
-                manager,
-                model=args.model,
-                think=args.think,
-                messages=initial_messages,
-                on_change=on_change if history_path else None,
-                max_tool_result=args.max_tool_result,
-                confirm=confirm_cb,
-                system_prompt=None if args.no_tools else DEFAULT_SYSTEM_PROMPT,
-                ui=ui,
-            )
-        except ChatError as e:
-            print(f"\nERROR: {e}")
-            return None
-        ui.rule(
-            f"{args.model}  think={args.think}  "
-            f"confirm-tools={args.confirm_tools}  context={args.context:,}"
-        )
-        ui.info("Type your message, or / for the list of commands.")
-        return sess
+            from .tui import run_tui
+        except ImportError:
+            use_tui = False
 
     try:
         async with ServerManager(specs) as manager:
-            session = start_session(manager)
-            if session is None:
+            if not use_tui:
+                print(f"\n{len(manager.ollama_tools)} tool(s) available:")
+                print(manager.describe_tools())
+            try:
+                session = ChatSession(
+                    manager,
+                    model=args.model,
+                    think=args.think,
+                    messages=initial_messages,
+                    on_change=on_change if history_path else None,
+                    max_tool_result=args.max_tool_result,
+                    confirm=None if use_tui else confirm_cb,
+                    system_prompt=None if args.no_tools else DEFAULT_SYSTEM_PROMPT,
+                    ui=ui,
+                )
+            except ChatError as e:
+                print(f"\nERROR: {e}")
                 return 1
-            await chat_repl(session, manager, history_path, args.model,
-                            context_limit=args.context, all_specs=all_specs, ui=ui)
+
+            if use_tui:
+                await run_tui(
+                    session=session, manager=manager, all_specs=all_specs,
+                    context_limit=args.context, history_path=history_path,
+                    model=args.model, confirm_mode=args.confirm_tools,
+                )
+            else:
+                ui.rule(
+                    f"{args.model}  think={args.think}  "
+                    f"confirm-tools={args.confirm_tools}  context={args.context:,}"
+                )
+                ui.info("Type your message, or / for the list of commands.")
+                await chat_repl(session, manager, history_path, args.model,
+                                context_limit=args.context, all_specs=all_specs,
+                                ui=ui)
     except RuntimeError as e:
         print(f"\nERROR: {e}")
         return 1
 
     return 0
-
-
-def _context_line(session: ChatSession, limit: int) -> str:
-    used = session.prompt_tokens
-    if not used:
-        return "[context] no data yet"
-    msg = f"[context] {used:,} prompt tokens in use"
-    if session.eval_tokens:
-        msg += f" (+{session.eval_tokens:,} generated last step)"
-    if limit > 0:
-        pct = used * 100 / limit
-        msg += f"  ~{pct:.0f}% of {limit:,}"
-        if pct >= 90:
-            msg += "  [!] near limit - Ollama will start dropping oldest messages"
-        elif pct >= 75:
-            msg += "  [!] getting full; consider /reset"
-    return msg
 
 
 # name(s) -> (help text). First name is canonical; the rest are aliases.

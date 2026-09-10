@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
+
 import ollama
 
 from .debug import debug, is_debug
@@ -126,20 +129,24 @@ class ChatSession:
         if self._on_change:
             self._on_change(self.messages)
 
-    def _chat_once(self) -> dict:
+    async def _chat_once(self) -> dict:
         debug("ollama request", {
             "model": self.model,
             "think": self.think,
             "messages": self.messages,
             "tools": f"<{len(self.manager.ollama_tools)} tools, listed at startup>",
         })
+        call = functools.partial(
+            self.client.chat,
+            model=self.model,
+            messages=self.messages,
+            tools=self.manager.ollama_tools,
+            think=self.think,
+        )
         try:
-            resp = self.client.chat(
-                model=self.model,
-                messages=self.messages,
-                tools=self.manager.ollama_tools,
-                think=self.think,
-            )
+            # ollama's client is blocking; keep it off the event loop so a TUI
+            # (or anything else awaiting) stays responsive while the model runs.
+            resp = await asyncio.get_running_loop().run_in_executor(None, call)
         except Exception as e:  # noqa: BLE001
             raise ChatError(f"Ollama chat failed: {e}") from e
         data = resp.model_dump(exclude_none=True)
@@ -157,7 +164,7 @@ class ChatSession:
 
         for _ in range(MAX_TOOL_ROUNDS):
             with self.ui.thinking():
-                msg = self._chat_once()
+                msg = await self._chat_once()
             self.messages.append(msg)
 
             tool_calls = msg.get("tool_calls") or []

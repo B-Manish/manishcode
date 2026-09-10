@@ -13,9 +13,11 @@ No cloud LLM involved. Installed command: **`manishcode`**.
    calls it requests are routed to the owning server, results are fed back, and
    it repeats until the model gives a final text answer.
 
-On a real terminal the output is styled (coloured role rules, markdown answers,
-tool calls as compact blocks, a spinner while the model thinks). Piped or with
-`--plain` / `--debug` it's plain line-oriented text.
+On a real terminal it opens a **full-screen TUI** (banner, scrollable transcript,
+docked input with `/`-command autocomplete, a status bar showing model /
+connected servers / context %, a y-N modal before side-effecting tools).
+Piped, or with `--plain` / `--debug`, it falls back to a plain line-oriented
+REPL (still coloured, with markdown answers, unless piped).
 
 ## Setup
 
@@ -90,7 +92,7 @@ uv run python smoke_test.py
 | `--model NAME` | Ollama model to use (default `qwen3:8b`). |
 | `--think` | Enable the model's thinking/reasoning mode. |
 | `--debug` | Print the full JSON of every Ollama request/response and tool call/result. Implies `--plain`. |
-| `--plain` | Turn off the styled output (colour, markdown answers, spinner) and use plain text. Auto-on when output isn't a terminal (piped, CI). |
+| `--plain` | Skip the full-screen TUI and use the plain REPL. Auto-on when output isn't a terminal (piped, CI) or with `--debug`. |
 | `--confirm-tools MODE` | Ask for `y/N` before a tool call runs. `risky` (default) prompts only for side-effecting tools (send mail, trash, write/move files, …); `all` prompts for every call; `none` never prompts. Piped/non-interactive input counts as "no". |
 | `--context TOKENS` | Effective Ollama context window, used only to print a "context used" percentage after each turn (default: `$OLLAMA_CONTEXT_LENGTH` or 4096). Set it to whatever you started `ollama serve` with. |
 | `--max-tool-result CHARS` | Trim any single tool result to this many chars before sending it to the model, so one big file (a 33 KB README, a directory tree, an API dump) can't overflow a small local context window. Default 8000; `0` = unlimited. `--debug` still logs the full result. |
@@ -411,6 +413,7 @@ mcp_client/
   servers.py   ServerManager: one task per server, tool merging + routing
   chat.py      ChatSession: the Ollama <-> tools loop
   history.py   save/load conversation JSON
-  ui.py        PlainUI / RichUI console output
+  ui.py        PlainUI / RichUI / TuiUI output adapters
+  tui.py       full-screen Textual app (default on a real terminal)
   debug.py     --debug logging
 ```

@@ -122,6 +122,73 @@ async def test_ui() -> None:
         check("RichUI renders bracketed / markdown text", False, repr(e))
 
 
+async def test_tui() -> None:
+    print("\n== Textual TUI (headless) ==")
+    from textual.widgets import RichLog
+
+    from mcp_client.tui import ConfirmScreen, ManishcodeApp, _make_confirm
+
+    class FakeConn:
+        class spec:  # noqa: D106
+            name = "duckduckgo"
+        tool_names = ["search"]
+        alive = True
+
+    class FakeManager:
+        ollama_tools = [{"function": {"name": "search"}}]
+        connections = [FakeConn()]
+
+        def describe_tools(self):
+            return "  - search (duckduckgo)"
+
+        async def health_check(self):
+            return []
+
+    class FakeSession:
+        prompt_tokens = 0
+        eval_tokens = 0
+        messages = [{"role": "system", "content": "x"}]
+        _confirm = None
+        ui = None
+        confirmed = None
+
+        async def send(self, text):
+            self.prompt_tokens = 900
+            if self._confirm:
+                self.confirmed = await self._confirm("write_file", {"p": "x"})
+            return "**hi** from a fake model\n- a\n- b"
+
+    sess = FakeSession()
+    app = ManishcodeApp(session=sess, manager=FakeManager(), all_specs={},
+                        context_limit=4096, history_path=None, model="m",
+                        confirm_mode="risky")
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#prompt").value = "/help"
+            await pilot.press("enter")
+            await pilot.pause()
+            app.query_one("#prompt").value = "hello"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            # a risky tool inside the turn should raise the confirm modal
+            check("confirm modal shown for risky tool",
+                  isinstance(app.screen, ConfirmScreen))
+            await pilot.press("y")
+            await pilot.pause(0.3)
+            check("modal answer reaches the session", sess.confirmed is True)
+            log_text = " ".join(str(s) for s in app.query_one(RichLog).lines)
+            check("assistant reply rendered", "fake model" in log_text)
+            check("status shows context after a turn", "ctx 21%" in
+                  str(app.query_one("#status").render()))
+            app.query_one("#prompt").value = "/quit"
+            await pilot.press("enter")
+            await pilot.pause()
+        check("TUI ran and exited cleanly", True)
+    except Exception as e:  # noqa: BLE001
+        check("TUI ran and exited cleanly", False, repr(e))
+
+
 async def test_no_tools() -> None:
     print("\n== --no-tools / empty ServerManager ==")
     async with ServerManager([]) as mgr:
@@ -292,6 +359,7 @@ async def main() -> int:
         tmp = Path(td)
         await test_config(tmp)
         await test_ui()
+        await test_tui()
         await test_no_tools()
         await test_routing(tmp)
         await test_runtime_connect(tmp)

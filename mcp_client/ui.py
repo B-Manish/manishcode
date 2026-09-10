@@ -104,6 +104,66 @@ class RichUI(PlainUI):
             yield
 
 
+class TuiUI(PlainUI):
+    """Routes chat events into the Textual app's transcript. Methods are called
+    from the event loop (ChatSession offloads the blocking Ollama call), so they
+    can touch widgets directly."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    def assistant(self, text: str) -> None:
+        self.app.tui_assistant(text)
+
+    def tool_call(self, name: str, args: str) -> None:
+        self.app.tui_write(Text.assemble(
+            ("  > ", "yellow"), (name, "bold"), (f"({args})", "dim")))
+
+    def tool_result(self, name: str, result: str) -> None:
+        self.app.tui_write(Text.assemble(("    ok  ", "green"), (result, "dim")))
+
+    def tool_error(self, msg: str) -> None:
+        self.app.tui_write(Text(f"    err  {msg}", style="red"))
+
+    def tool_note(self, msg: str) -> None:
+        self.app.tui_write(Text(f"    .. {msg}", style="dim"))
+
+    def info(self, msg: str) -> None:
+        self.app.tui_write(Text(msg, style="dim"))
+
+    def warn(self, msg: str) -> None:
+        self.app.tui_write(Text(msg, style="yellow"))
+
+    def rule(self, msg: str) -> None:
+        self.app.tui_write(Text(msg, style="dim"))
+
+    @contextlib.contextmanager
+    def thinking(self, label: str = "thinking"):
+        self.app.tui_set_working(True)
+        try:
+            yield
+        finally:
+            self.app.tui_set_working(False)
+
+
+def context_line(session, limit: int) -> str:
+    """One-line summary of how full the context window is, printed after a turn."""
+    used = getattr(session, "prompt_tokens", 0)
+    if not used:
+        return "[context] no data yet"
+    msg = f"[context] {used:,} prompt tokens in use"
+    if getattr(session, "eval_tokens", 0):
+        msg += f" (+{session.eval_tokens:,} generated last step)"
+    if limit > 0:
+        pct = used * 100 / limit
+        msg += f"  ~{pct:.0f}% of {limit:,}"
+        if pct >= 90:
+            msg += "  [!] near limit - Ollama will start dropping oldest messages"
+        elif pct >= 75:
+            msg += "  [!] getting full; consider /reset"
+    return msg
+
+
 def make_ui(plain: bool = False) -> PlainUI:
     """RichUI on an interactive terminal; PlainUI when piped, dumb, or --plain."""
     if plain or not _HAS_RICH:
