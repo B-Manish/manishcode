@@ -54,6 +54,8 @@ class Connection:
     tool_names: list[str] = field(default_factory=list)
     alive: bool = True
     _queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    _stop: asyncio.Event = field(default_factory=asyncio.Event)
+    _task: asyncio.Task | None = None
 
     async def submit(self, make_coro):
         """Run ``make_coro(session)`` on this connection's worker task."""
@@ -62,22 +64,6 @@ class Connection:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         await self._queue.put((make_coro, fut))
         return await fut
-
-
-class NullServerManager:
-    """Stand-in for ServerManager when --no-tools is used: no servers, no tools.
-    Exposes just the surface the chat loop touches so plain chat works unchanged."""
-
-    ollama_tools: list[dict] = []
-
-    def describe_tools(self) -> str:
-        return "  (none - running without MCP tools)"
-
-    async def call_tool(self, name: str, arguments: dict) -> str:
-        raise ToolCallError("no MCP servers are connected (--no-tools)")
-
-    async def health_check(self) -> list[str]:
-        return []
 
 
 class ServerManager:
@@ -92,10 +78,7 @@ class ServerManager:
     async def __aenter__(self) -> "ServerManager":
         ready = []
         for spec in self._specs:
-            conn = Connection(spec=spec)
-            started: asyncio.Future = asyncio.get_running_loop().create_future()
-            task = asyncio.create_task(self._serve(conn, started), name=f"mcp:{spec.name}")
-            self._tasks.append(task)
+            conn, started = self._spawn(spec)
             ready.append((conn, started))
 
         for conn, started in ready:
@@ -106,10 +89,52 @@ class ServerManager:
                 continue
             self._register(conn, tools)
 
-        if not self.connections:
+        # An empty spec list is an intentional "start bare, /mcp connect later"
+        # session. Only treat it as an error when servers were asked for and
+        # none came up.
+        if self._specs and not self.connections:
             await self._stop()
             raise RuntimeError("no MCP servers connected")
         return self
+
+    def _spawn(self, spec: ServerSpec) -> tuple[Connection, asyncio.Future]:
+        conn = Connection(spec=spec)
+        started: asyncio.Future = asyncio.get_running_loop().create_future()
+        conn._task = asyncio.create_task(
+            self._serve(conn, started), name=f"mcp:{spec.name}"
+        )
+        self._tasks.append(conn._task)
+        return conn, started
+
+    async def connect(self, spec: ServerSpec) -> int:
+        """Start one more server at runtime and merge in its tools. Returns the
+        tool count. Raises ValueError if a server of that name is already up."""
+        if any(c.spec.name == spec.name for c in self.connections):
+            raise ValueError(f"server {spec.name!r} is already connected")
+        conn, started = self._spawn(spec)
+        tools = await started  # propagates a startup failure to the caller
+        self._register(conn, tools)
+        return len(conn.tool_names)
+
+    async def disconnect(self, name: str) -> None:
+        """Stop one server and drop its tools. Raises ValueError if not found."""
+        conn = next((c for c in self.connections if c.spec.name == name), None)
+        if conn is None:
+            raise ValueError(f"server {name!r} is not connected")
+        conn._stop.set()
+        conn.alive = False
+        if conn._task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(conn._task), timeout=5)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                conn._task.cancel()
+        for exposed in conn.tool_names:
+            self._route.pop(exposed, None)
+        dropped = set(conn.tool_names)
+        self._ollama_tools = [
+            t for t in self._ollama_tools if t["function"]["name"] not in dropped
+        ]
+        self.connections.remove(conn)
 
     async def __aexit__(self, *exc):
         await self._stop()
@@ -144,16 +169,16 @@ class ServerManager:
             conn.alive = False
 
     async def _pump(self, conn: Connection, session: ClientSession) -> None:
-        shutdown_wait = asyncio.create_task(self._shutdown.wait())
+        stop_wait = asyncio.create_task(self._await_stop(conn))
         try:
             while True:
                 get_job = asyncio.create_task(conn._queue.get())
                 done, _ = await asyncio.wait(
-                    {get_job, shutdown_wait}, return_when=asyncio.FIRST_COMPLETED
+                    {get_job, stop_wait}, return_when=asyncio.FIRST_COMPLETED
                 )
                 if get_job not in done:
                     get_job.cancel()
-                    return  # shutdown
+                    return  # global shutdown or this server was disconnected
                 make_coro, fut = get_job.result()
                 try:
                     fut.set_result(await make_coro(session))
@@ -161,7 +186,18 @@ class ServerManager:
                     if not fut.done():
                         fut.set_exception(e)
         finally:
-            shutdown_wait.cancel()
+            stop_wait.cancel()
+
+    async def _await_stop(self, conn: Connection) -> None:
+        waiters = [
+            asyncio.create_task(self._shutdown.wait()),
+            asyncio.create_task(conn._stop.wait()),
+        ]
+        try:
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waiters:
+                w.cancel()
 
     def _register(self, conn: Connection, tools) -> None:
         for tool in tools:

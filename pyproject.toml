@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "mcp>=2.2.0",
     "ollama>=0.6.2",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.scripts]

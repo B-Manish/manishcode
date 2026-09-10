@@ -30,7 +30,7 @@ from mcp_client.config import (
     select_servers,
 )
 from mcp_client.history import load_history, save_history
-from mcp_client.servers import NullServerManager, ServerManager, ToolCallError
+from mcp_client.servers import ServerManager, ToolCallError
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -107,15 +107,16 @@ async def test_config(tmp: Path) -> None:
 
 
 async def test_no_tools() -> None:
-    print("\n== --no-tools (plain chat) ==")
-    mgr = NullServerManager()
-    check("NullServerManager exposes no tools", mgr.ollama_tools == [])
-    check("health_check is a no-op", await mgr.health_check() == [])
-    try:
-        await mgr.call_tool("anything", {})
-        check("call_tool refuses", False)
-    except ToolCallError:
-        check("call_tool refuses", True)
+    print("\n== --no-tools / empty ServerManager ==")
+    async with ServerManager([]) as mgr:
+        check("empty spec list starts cleanly (no RuntimeError)", True)
+        check("no tools", mgr.ollama_tools == [])
+        check("health_check is a no-op", await mgr.health_check() == [])
+        try:
+            await mgr.call_tool("anything", {})
+            check("call_tool on unknown tool raises", False)
+        except ToolCallError:
+            check("call_tool on unknown tool raises", True)
 
 
 async def test_routing(tmp: Path) -> None:
@@ -148,6 +149,43 @@ async def test_routing(tmp: Path) -> None:
             check("unknown tool -> ToolCallError", False)
         except ToolCallError:
             check("unknown tool -> ToolCallError", True)
+
+
+async def test_runtime_connect(tmp: Path) -> None:
+    print("\n== runtime /mcp connect + disconnect ==")
+    d1, d2 = tmp / "rc1", tmp / "rc2"
+    d1.mkdir(); d2.mkdir()
+    (d2 / "z.txt").write_text("ZULU")
+
+    async with ServerManager([fs_spec(str(d1), "a")]) as mgr:
+        check("starts with one server", len(mgr.connections) == 1)
+        base_tools = len(mgr.ollama_tools)
+
+        added = await mgr.connect(fs_spec(str(d2), "b"))
+        check("connect() adds a server", len(mgr.connections) == 2 and added > 0)
+        check("connect() merges tools", len(mgr.ollama_tools) == base_tools + added)
+
+        # "b" collides with "a" on tool names, so its tools are exposed b__*
+        b_read = "b__read_text_file"
+        names = [t["function"]["name"] for t in mgr.ollama_tools]
+        check("new server's tools exposed under its name", b_read in names)
+        r = await mgr.call_tool(b_read, {"path": str(d2 / "z.txt")})
+        check("new server's tool routes", "ZULU" in r, r)
+
+        try:
+            await mgr.connect(fs_spec(str(d1), "a"))
+            check("connect() rejects duplicate name", False)
+        except ValueError:
+            check("connect() rejects duplicate name", True)
+
+        await mgr.disconnect("b")
+        check("disconnect() drops the server", len(mgr.connections) == 1)
+        check("disconnect() drops its tools", len(mgr.ollama_tools) == base_tools)
+        try:
+            await mgr.call_tool(b_read, {"path": str(d2 / "z.txt")})
+            check("disconnected tool is gone", False)
+        except ToolCallError:
+            check("disconnected tool is gone", True)
 
 
 async def test_tool_result_cap(tmp: Path) -> None:
@@ -239,6 +277,7 @@ async def main() -> int:
         await test_config(tmp)
         await test_no_tools()
         await test_routing(tmp)
+        await test_runtime_connect(tmp)
         await test_bad_server()
         if not args.skip_ollama:
             await test_tool_result_cap(tmp)

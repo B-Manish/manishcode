@@ -26,7 +26,15 @@ from .config import (
 )
 from .debug import set_debug
 from .history import load_history, save_history
-from .servers import NullServerManager, ServerManager
+from .servers import ServerManager
+
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import Completer, Completion
+
+    _HAS_PTK = True
+except ImportError:  # fall back to plain input() if prompt_toolkit is missing
+    _HAS_PTK = False
 
 
 def _force_utf8_console() -> None:
@@ -174,7 +182,18 @@ async def run(args) -> int:
             print(f"{name}: {spec.display_cmd}")
         return 0
 
-    if not args.no_tools:
+    all_specs: dict[str, ServerSpec] = {}
+    cfg_path = find_config(args.config)
+    if cfg_path is not None:
+        try:
+            all_specs = load_config(cfg_path)
+        except ConfigError:
+            pass  # /mcp just won't have a catalog to offer
+
+    if args.no_tools:
+        specs: list[ServerSpec] = []
+        print("Starting with no MCP servers (--no-tools). Add one with /mcp connect NAME.")
+    else:
         specs = resolve_specs(args)
         print(f"Starting {len(specs)} MCP server(s)...")
 
@@ -218,25 +237,17 @@ async def run(args) -> int:
             f"\nModel: {args.model}  think={args.think}  debug={args.debug}  "
             f"max-tool-result={args.max_tool_result or 'unlimited'}  "
             f"confirm-tools={args.confirm_tools}  context={args.context:,}\n"
-            "Type your message. Commands: /quit, /reset, /tools, /context, /save FILE\n"
+            "Type your message, or / for the list of commands.\n"
         )
         return sess
 
     try:
-        if args.no_tools:
-            manager = NullServerManager()
+        async with ServerManager(specs) as manager:
             session = start_session(manager)
             if session is None:
                 return 1
             await chat_repl(session, manager, history_path, args.model,
-                            context_limit=args.context)
-        else:
-            async with ServerManager(specs) as manager:
-                session = start_session(manager)
-                if session is None:
-                    return 1
-                await chat_repl(session, manager, history_path, args.model,
-                                context_limit=args.context)
+                            context_limit=args.context, all_specs=all_specs)
     except RuntimeError as e:
         print(f"\nERROR: {e}")
         return 1
@@ -261,38 +272,185 @@ def _context_line(session: ChatSession, limit: int) -> str:
     return msg
 
 
-async def chat_repl(session: ChatSession, manager: ServerManager, history_path, model,
-                    context_limit: int = 0):
+# name(s) -> (help text). First name is canonical; the rest are aliases.
+SLASH_COMMANDS: list[tuple[tuple[str, ...], str]] = [
+    (("/help", "/", "/?"), "show this list of commands"),
+    (("/new", "/reset", "/clear"), "start a fresh conversation (clear history)"),
+    (("/tools",), "list connected tools and which server owns them"),
+    (("/mcp",), "list config servers; /mcp connect NAME | /mcp disconnect NAME"),
+    # (works in --no-tools too: start bare, then /mcp connect what you need)
+    (("/context",), "show how many tokens the conversation is using"),
+    (("/save", "/save FILE"), "write the conversation to FILE (or the --history file)"),
+    (("/quit", "/exit"), "leave"),
+]
+
+
+def _print_commands() -> None:
+    print("Commands:")
+    for names, help_text in SLASH_COMMANDS:
+        print(f"  {', '.join(names):<24} {help_text}")
+
+
+# (name, meta) pairs shown in the as-you-type dropdown.
+_COMPLETION_ITEMS = [
+    ("/help", "show the command list"),
+    ("/new", "start a fresh conversation"),
+    ("/reset", "alias for /new"),
+    ("/clear", "alias for /new"),
+    ("/tools", "list connected tools"),
+    ("/mcp", "list / connect / disconnect MCP servers"),
+    ("/context", "show token usage"),
+    ("/save", "write the conversation to a file"),
+    ("/quit", "exit"),
+    ("/exit", "alias for /quit"),
+]
+
+if _HAS_PTK:
+
+    class _SlashCompleter(Completer):
+        """Offer slash-command completions, but only while the line is a bare
+        ``/word`` with no space yet."""
+
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if not text.startswith("/") or " " in text:
+                return
+            for name, meta in _COMPLETION_ITEMS:
+                if name.startswith(text.lower()):
+                    yield Completion(
+                        name, start_position=-len(text),
+                        display=name, display_meta=meta,
+                    )
+
+
+def _make_reader():
+    """Return an async ``read(prompt) -> str``. Uses prompt_toolkit (live
+    command dropdown) on a real terminal; falls back to plain input() when
+    prompt_toolkit is missing, stdin is piped, or the console can't host it."""
     loop = asyncio.get_event_loop()
+
+    async def plain_read(prompt: str) -> str:
+        return (await loop.run_in_executor(None, input, prompt)).strip()
+
+    if not _HAS_PTK or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return plain_read
+
+    ptk: PromptSession = PromptSession(
+        completer=_SlashCompleter(), complete_while_typing=True
+    )
+    state = {"ok": True}
+
+    async def ptk_read(prompt: str) -> str:
+        if state["ok"]:
+            try:
+                return (await ptk.prompt_async(prompt)).strip()
+            except (EOFError, KeyboardInterrupt):
+                raise
+            except Exception:  # noqa: BLE001 - console can't host prompt_toolkit
+                state["ok"] = False
+                print("[warn] rich prompt unavailable; using a plain prompt")
+        return await plain_read(prompt)
+
+    return ptk_read
+
+
+def _print_mcp(manager, all_specs: dict) -> None:
+    connected = {c.spec.name: c for c in getattr(manager, "connections", [])}
+    names = sorted(set(all_specs) | set(connected))
+    if not names:
+        print("no servers in config, none connected")
+        return
+    for name in names:
+        if name in connected:
+            c = connected[name]
+            tag = f"connected  {len(c.tool_names)} tool(s)"
+            if not c.alive:
+                tag += "  [DOWN]"
+        elif name in all_specs and all_specs[name].missing_env:
+            tag = f"available  (needs env: {', '.join(all_specs[name].missing_env)})"
+        else:
+            tag = "available"
+        print(f"  {name:<16} {tag}")
+    print("  /mcp connect NAME  |  /mcp disconnect NAME")
+
+
+async def _handle_mcp(user_input: str, manager, all_specs: dict) -> None:
+    parts = user_input.split()
+    action = parts[1].lower() if len(parts) > 1 else "list"
+    if action in ("list", "ls", "status"):
+        _print_mcp(manager, all_specs)
+        return
+    if action == "connect" and len(parts) == 3:
+        name = parts[2]
+        spec = all_specs.get(name)
+        if spec is None:
+            print(f"{name!r} not in config (have: {', '.join(all_specs) or 'none'})")
+            return
+        if spec.missing_env:
+            print(f"cannot connect {name!r}: env not set: {', '.join(spec.missing_env)}")
+            return
+        print(f"connecting {name!r}...")
+        try:
+            n = await manager.connect(spec)
+            print(f"  [ok] {name}: {n} tool(s) added")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] could not connect {name!r}: {e}")
+    elif action == "disconnect" and len(parts) == 3:
+        name = parts[2]
+        try:
+            await manager.disconnect(name)
+            print(f"  disconnected {name!r}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] {e}")
+    else:
+        print("usage: /mcp [list]  |  /mcp connect NAME  |  /mcp disconnect NAME")
+
+
+async def chat_repl(session: ChatSession, manager: ServerManager, history_path, model,
+                    context_limit: int = 0, all_specs: dict | None = None):
+    all_specs = all_specs or {}
+    read = _make_reader()
     while True:
         try:
-            user_input = (await loop.run_in_executor(None, input, ">>> ")).strip()
+            user_input = await read(">>> ")
         except (EOFError, KeyboardInterrupt):
             print()
             break
         if not user_input:
             continue
 
-        if user_input in ("/quit", "/exit"):
-            break
-        if user_input == "/reset":
-            session.messages.clear()
-            print("(history cleared)")
-            continue
-        if user_input == "/tools":
-            print(manager.describe_tools())
-            continue
-        if user_input == "/context":
-            print(_context_line(session, context_limit))
-            continue
-        if user_input.startswith("/save"):
-            parts = user_input.split(maxsplit=1)
-            target = Path(parts[1]).expanduser() if len(parts) > 1 else history_path
-            if not target:
-                print("usage: /save FILE")
+        if user_input.startswith("/"):
+            cmd = user_input.split(maxsplit=1)[0].lower()
+            if cmd in ("/help", "/", "/?"):
+                _print_commands()
                 continue
-            save_history(target, session.messages, model)
-            print(f"saved to {target}")
+            if cmd in ("/quit", "/exit"):
+                break
+            if cmd in ("/new", "/reset", "/clear"):
+                keep = [m for m in session.messages
+                        if isinstance(m, dict) and m.get("role") == "system"]
+                session.messages[:] = keep
+                print("(new conversation)")
+                continue
+            if cmd == "/tools":
+                print(manager.describe_tools())
+                continue
+            if cmd == "/mcp":
+                await _handle_mcp(user_input, manager, all_specs)
+                continue
+            if cmd == "/context":
+                print(_context_line(session, context_limit))
+                continue
+            if cmd == "/save":
+                parts = user_input.split(maxsplit=1)
+                target = Path(parts[1]).expanduser() if len(parts) > 1 else history_path
+                if not target:
+                    print("usage: /save FILE")
+                    continue
+                save_history(target, session.messages, model)
+                print(f"saved to {target}")
+                continue
+            print(f"unknown command {cmd!r}. Type / for the list.")
             continue
 
         try:

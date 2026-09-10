@@ -62,15 +62,24 @@ uv run python -m mcp_client --config config.json
 | `--max-tool-result CHARS` | Trim any single tool result to this many chars before sending it to the model, so one big file (a 33 KB README, a directory tree, an API dump) can't overflow a small local context window. Default 8000; `0` = unlimited. `--debug` still logs the full result. |
 | `--history FILE` | Load conversation from `FILE` at startup and save back after every turn. |
 | `--list-servers` | Print the servers defined in the config and exit. |
-| `--no-tools` | Plain chat: start no MCP servers, give the model no tools (and no tool-related system prompt). Ignores `--server` / `--server-cmd` / `--config`. `--history`, `--think`, `--context` still work. |
+| `--no-tools` | Start with **no** MCP servers and no tool-related system prompt — just the model. Ignores `--server` / `--server-cmd`. You can still pull servers in mid-session with `/mcp connect NAME` (needs `--config` for the catalog). `--history`, `--think`, `--context` all work. |
 
 ### In-session commands
 
-- `/quit` — exit
-- `/reset` — clear conversation history
+Type `/` (or `/help`) at the prompt to print the list. Unknown `/commands` are
+rejected rather than sent to the model.
+
+- `/help`, `/`, `/?` — show the command list with descriptions
+- `/new`, `/reset`, `/clear` — start a fresh conversation (keeps the system prompt)
 - `/tools` — list connected tools and their server
+- `/mcp` — list the servers in the config with their status (connected /
+  available / needs-env); `/mcp connect NAME` starts one mid-session and merges
+  its tools in, `/mcp disconnect NAME` stops it and drops its tools. Handy for
+  keeping the tool count low: start bare, add a server when you need it, drop it
+  when you're done.
 - `/context` — show how many prompt tokens the conversation + tools currently use
 - `/save FILE` — write the current conversation to `FILE`
+- `/quit`, `/exit` — exit
 
 After every turn the client prints a line like
 `[context] 4,210 prompt tokens in use  ~34% of 12,288`. When it passes ~75% it
@@ -91,10 +100,13 @@ One-off server without a config:
 uv run mcp-ollama --server-cmd "npx -y @modelcontextprotocol/server-filesystem C:\Users\me\Documents"
 ```
 
-Plain chat, no tools at all:
+Plain chat, no tools — then pull in a server when you need one:
 
 ```
-uv run mcp-ollama --no-tools --model qwen3:8b
+uv run mcp-ollama --no-tools --config config.json --model qwen3:8b
+>>> ...just chat...
+>>> /mcp connect duckduckgo     # now the model can search the web
+>>> /mcp disconnect duckduckgo  # back to plain chat
 ```
 
 Resume a saved conversation with debug logging:
