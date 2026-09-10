@@ -60,6 +60,32 @@ STARTER_CONFIG = """\
     "duckduckgo": {
       "command": "uvx",
       "args": ["duckduckgo-mcp-server"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git"]
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
+      "env": { "BRAVE_API_KEY": "${BRAVE_API_KEY}" }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+    },
+    "gmail": {
+      "command": "npx",
+      "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"]
     }
   }
 }
@@ -84,8 +110,9 @@ def _cmd_init(argv: list[str]) -> int:
         print(f"could not write {target}: {e}")
         return 1
     print(f"Wrote {target}")
-    print("  - 'filesystem' is scoped to this folder ('.'); edit the path or add")
-    print("    more servers (see the README), then run:  manishcode")
+    print("  A menu of common MCP servers. Nothing is connected until you run")
+    print("  `manishcode --server NAME`, `--all`, or `/mcp connect NAME`.")
+    print("  ('filesystem' is scoped to this folder; brave/github need an API key.)")
     return 0
 
 

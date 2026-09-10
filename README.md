@@ -1,39 +1,35 @@
 # manishcode
 
-A local MCP client: connect to any number of [MCP](https://modelcontextprotocol.io)
-servers and let a **local Ollama model** (default `qwen3:8b`) call their tools.
-No cloud LLM involved. Installed command: **`manishcode`**.
+**Give a local LLM real tools, on your own machine.**
 
-## What it does
+Local models like Llama or Qwen can reason but can't *do* anything on their own —
+they can't read your files, search the web, or check your email. `manishcode`
+bridges that gap: it connects a local **Ollama** model to any number of
+[MCP](https://modelcontextprotocol.io) servers and lets the model call their
+tools in a chat loop. Nothing leaves your machine — no cloud LLM, no API keys for
+the model.
 
-1. Launches one or more MCP servers as subprocesses (from a config file or `--server-cmd`).
-2. Merges every server's tools into a single list and converts the schemas to
-   Ollama's tool-calling format.
-3. Runs an interactive chat loop: your message + tools go to Ollama, any tool
-   calls it requests are routed to the owning server, results are fed back, and
-   it repeats until the model gives a final text answer.
+Point it at a folder and ask questions about your code. Connect the web-search
+server and ask about today's news. Connect Gmail and have it triage your inbox.
+All driven by a model running locally.
 
-On a real terminal it opens a **full-screen TUI** (banner, scrollable transcript,
-docked input with `/`-command autocomplete, a status bar showing model /
-connected servers / context %, a y-N modal before side-effecting tools).
-Piped, or with `--plain` / `--debug`, it falls back to a plain line-oriented
-REPL (still coloured, with markdown answers, unless piped).
+On a real terminal it opens a full-screen TUI (scrollable transcript, `/`-command
+autocomplete, a status bar with model / connected servers / context usage, a y-N
+prompt before anything that writes or sends). Piped or with `--plain` it's a
+plain REPL.
 
 ## Setup
 
-### Requirements (every machine)
+### Prerequisites
 
-- **[uv](https://docs.astral.sh/uv/)** — one line to install:
-  - macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-  - Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
+- **[uv](https://docs.astral.sh/uv/)** — installs `manishcode` and fetches Python for you
+  (macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh` ·
+  Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`)
+- **[Ollama](https://ollama.com)** installed and running, with a tool-capable model pulled:
+  `ollama pull qwen2.5:7b-instruct-q4_0`
+- **Node.js** installed — the MCP servers run via `npx`
 
-  uv also fetches Python 3.11+ for you if you don't have it.
-- **[Ollama](https://ollama.com)** running locally with a tool-capable model pulled:
-  ```
-  ollama pull qwen2.5:7b-instruct-q4_0
-  ```
-- **Node.js 18+** — for the `npx`-based MCP servers (filesystem, gmail, brave, …).
-  Check with `node --version`.
+That's it.
 
 ### Install
 
@@ -163,10 +159,32 @@ manishcode --config config.json --history session.json --debug
 
 ## Configuring servers
 
-`manishcode init` writes a starter `config.json`; edit it to add servers. (In a
-clone of this repo, `config.example.json` is a fuller starting point.) The
-`mcpServers` key matches the convention used by Claude Desktop, so an existing
-config often works as-is.
+`config.json` is a **menu**, not an autostart list — bare `manishcode` connects
+nothing. `manishcode init` (or the first run) writes one pre-filled with the
+servers below; `/mcp` lists them, and you connect what a task needs:
+
+```
+manishcode --server duckduckgo --server filesystem   # at startup
+manishcode --all                                     # everything
+>>> /mcp connect gmail                                # mid-session
+```
+
+| Server | Tools for | Setup |
+|--------|-----------|-------|
+| `filesystem` | read/write files under a directory | scoped to `.` — edit the path in `config.json` |
+| `duckduckgo` | web search + fetch a result page | none |
+| `fetch` | pull any URL as trimmed markdown | none |
+| `git` | inspect/operate a local git repo | runs against the current directory |
+| `brave-search` | higher-quality web search | free key from <https://brave.com/search/api/>, `setx BRAVE_API_KEY ...` |
+| `github` | search repos/issues/code, read PRs | `setx GITHUB_TOKEN ghp_...` |
+| `gmail` | read/search/draft/send mail | one-time OAuth, see below |
+| `playwright` | drive a real browser | first connect downloads Chromium (~150 MB); ~24 tools — connect it alone |
+
+Servers that need a key (`brave-search`, `github`) are **skipped with a `[warn]`**
+if the variable isn't set, so they can sit in the config harmlessly until you add
+one. Restart your terminal after `setx` so the variable is visible.
+
+### The config format
 
 ```json
 {
@@ -174,189 +192,38 @@ config often works as-is.
     "<name>": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\path"],
-      "env": { "OPTIONAL_VAR": "value" }
+      "env": { "SOME_KEY": "${SOME_KEY}" }
     }
   }
 }
 ```
 
-- `command` — executable to run (`npx`, `uvx`, `python`, an absolute path, …).
-- `args` — list of arguments.
-- `env` — optional extra environment variables. The parent environment (PATH etc.)
-  is always inherited; these are layered on top. A value may reference a variable
-  from the parent environment as `${VAR}` (e.g. `"BRAVE_API_KEY": "${BRAVE_API_KEY}"`).
-  If any `${VAR}` a server needs is **not set**, that server is skipped at startup
-  with a `[warn]` line instead of crashing the session — so a config can carry an
-  API-key server that only activates when you've exported the key.
+- `command` / `args` — how to launch the server (`npx`, `uvx`, `python`, a path).
+- `env` — extra environment variables, layered on the inherited environment.
+  `${VAR}` is filled from your environment at launch; a server with an unset
+  `${VAR}` is skipped with a `[warn]` instead of crashing the session.
+- Same key name as Claude Desktop's config, so an existing `mcpServers` object
+  usually works as-is.
+- If two servers expose a tool with the same name, the second is renamed
+  `<servername>__<toolname>`.
 
-If two servers expose a tool with the same name, the second one's tools are
-exposed to the model as `<servername>__<toolname>`.
+### Gmail — one-time OAuth
 
-### Example server configs
+Gmail has no API-key mode, so a first-time setup is needed:
 
-Copy any of these into the `mcpServers` object. All are official servers from
-`@modelcontextprotocol`.
-
-**Filesystem** — read/write files under the given directories:
-
-```json
-"filesystem": {
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-filesystem",
-           "C:\\Users\\me\\Documents", "C:\\Users\\me\\projects"]
-}
-```
-
-**Memory** — a persistent knowledge graph the model can write to and query:
-
-```json
-"memory": {
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-memory"],
-  "env": { "MEMORY_FILE_PATH": "C:\\Users\\me\\.mcp-memory.json" }
-}
-```
-
-**Everything** — reference server exercising every MCP feature; handy for testing
-tool-calling:
-
-```json
-"everything": {
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-everything"]
-}
-```
-
-**Playwright** — drive a real browser (navigate, click, type, screenshot, read
-page content). First run downloads Chromium (~150 MB), so the server may take a
-minute to report ready. Exposes ~20 tools, which adds ~3–4k prompt tokens per
-call — best connected on its own rather than alongside other servers:
-
-```json
-"playwright": {
-  "command": "npx",
-  "args": ["-y", "@playwright/mcp@latest", "--headless"]
-}
-```
-
-**Git** — inspect and operate on a local git repo (needs `uvx` from uv):
-
-```json
-"git": {
-  "command": "uvx",
-  "args": ["mcp-server-git", "--repository", "C:\\Users\\me\\projects\\myrepo"]
-}
-```
-
-**Fetch** — fetch a URL and convert it to trimmed markdown for the model (needs
-`uvx`). Its `max_length` / `start_index` args let the model page through a long
-page instead of swallowing it whole — pair it with a GitHub file's `download_url`
-to read a big README in bites:
-
-```json
-"fetch": {
-  "command": "uvx",
-  "args": ["mcp-server-fetch"]
-}
-```
-
-### Web search
-
-Local models have **no built-in web access** — they can't answer "what's the
-weather in Hyderabad today" or "latest news about X" on their own. Add one of
-these search servers and the model will call it for anything time-sensitive.
-
-**DuckDuckGo** — no API key, works out of the box (needs `uvx` from uv). Exposes
-`search` (DuckDuckGo results) and `fetch_content` (pull and clean a result page):
-
-```json
-"duckduckgo": {
-  "command": "uvx",
-  "args": ["duckduckgo-mcp-server"]
-}
-```
-
-**Brave Search** — higher-quality results but needs a free API key from
-<https://brave.com/search/api/>. Export the key as `BRAVE_API_KEY`; the config
-reads it via `${BRAVE_API_KEY}`, and if the variable isn't set the server is
-skipped with a warning (the rest of the session runs normally):
-
-```json
-"brave-search": {
-  "command": "npx",
-  "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
-  "env": { "BRAVE_API_KEY": "${BRAVE_API_KEY}" }
-}
-```
-
-```powershell
-# PowerShell — set for the current session, then run
-$env:BRAVE_API_KEY = "your-key-here"
-manishcode --config config.json --server brave-search
-```
-
-Quick check (DuckDuckGo, no key needed):
-
-```
-manishcode --config config.json --server duckduckgo
->>> what's the weather in Hyderabad today
-```
-
-You should see a `[tool] search(...)` line and an answer grounded in real,
-current results.
-
-### Gmail
-
-Read, search, summarise, draft, and send mail from your Gmail account. Uses
-[`@gongrzhe/server-gmail-autoauth-mcp`](https://www.npmjs.com/package/@gongrzhe/server-gmail-autoauth-mcp).
-
-```json
-"gmail": {
-  "command": "npx",
-  "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]
-}
-```
-
-**One-time OAuth setup** (Gmail has no API-key mode):
-
-1. In the [Google Cloud console](https://console.cloud.google.com/): create a
-   project, enable the **Gmail API**, and configure the OAuth consent screen
-   (External; add your own address as a test user).
-2. Create an **OAuth client ID** of type **Desktop app**. Download the JSON and
-   save it as `gcp-oauth.keys.json` in `~/.gmail-mcp/` (i.e.
-   `C:\Users\<you>\.gmail-mcp\gcp-oauth.keys.json`).
-3. Run the auth flow once — a browser window opens, you approve, and a token is
-   cached next to the keys file:
-   ```powershell
+1. [Google Cloud console](https://console.cloud.google.com/) → new project →
+   enable the **Gmail API** → configure the OAuth consent screen (External; add
+   your own address as a test user).
+2. Create an **OAuth client ID**, type **Desktop app**. Download the JSON and
+   save it as `~/.gmail-mcp/gcp-oauth.keys.json`
+   (`C:\Users\<you>\.gmail-mcp\gcp-oauth.keys.json`).
+3. Run the auth flow once (opens a browser, caches a token next to the keys):
+   ```
    npx -y @gongrzhe/server-gmail-autoauth-mcp auth
    ```
 
-After that the server starts with no further prompts. Then:
-
-```powershell
-manishcode --config config.json --server gmail --model qwen2.5:7b-instruct-q4_0
-```
-```
->>> summarise my 5 most recent unread emails
->>> draft a reply to the one from Alice saying I'll review it Monday
-```
-
-**Sending / deleting is gated.** This client auto-runs whatever tool the model
-picks, so by default `--confirm-tools risky` makes it stop and ask before any
-`send_*`, `trash_*`, `delete_*`, or `modify_*` call:
-
-```
-  [tool] send_email({'to': 'alice@example.com', 'subject': 'Re: proposal', ...})
-  [confirm] run send_email({...}) ? [y/N]
-```
-
-Answer `n` and the model is told you declined and moves on. Use
-`--confirm-tools all` to confirm every call, or `none` to disable (not
-recommended with a Gmail server connected).
-
-> **Context window:** full message bodies and long thread lists are large. Ask
-> for a few messages at a time; `--max-tool-result` caps each result but the
-> model can still lose track on "analyse my whole inbox".
+Then `/mcp connect gmail` (or `--server gmail`) works with no further prompts.
+Sending, deleting and label changes go through the `--confirm-tools` y-N prompt.
 
 ## Error handling
 
