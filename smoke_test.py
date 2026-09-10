@@ -30,7 +30,7 @@ from mcp_client.config import (
     select_servers,
 )
 from mcp_client.history import load_history, save_history
-from mcp_client.servers import ServerManager, ToolCallError
+from mcp_client.servers import NullServerManager, ServerManager, ToolCallError
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -104,6 +104,18 @@ async def test_config(tmp: Path) -> None:
     check("read-only tools not flagged risky",
           not any(is_risky_tool(t) for t in
                   ("search", "read_text_file", "list_directory", "get_thread")))
+
+
+async def test_no_tools() -> None:
+    print("\n== --no-tools (plain chat) ==")
+    mgr = NullServerManager()
+    check("NullServerManager exposes no tools", mgr.ollama_tools == [])
+    check("health_check is a no-op", await mgr.health_check() == [])
+    try:
+        await mgr.call_tool("anything", {})
+        check("call_tool refuses", False)
+    except ToolCallError:
+        check("call_tool refuses", True)
 
 
 async def test_routing(tmp: Path) -> None:
@@ -225,6 +237,7 @@ async def main() -> int:
     with tempfile.TemporaryDirectory(prefix="mcp_smoke_") as td:
         tmp = Path(td)
         await test_config(tmp)
+        await test_no_tools()
         await test_routing(tmp)
         await test_bad_server()
         if not args.skip_ollama:

@@ -64,6 +64,22 @@ class Connection:
         return await fut
 
 
+class NullServerManager:
+    """Stand-in for ServerManager when --no-tools is used: no servers, no tools.
+    Exposes just the surface the chat loop touches so plain chat works unchanged."""
+
+    ollama_tools: list[dict] = []
+
+    def describe_tools(self) -> str:
+        return "  (none - running without MCP tools)"
+
+    async def call_tool(self, name: str, arguments: dict) -> str:
+        raise ToolCallError("no MCP servers are connected (--no-tools)")
+
+    async def health_check(self) -> list[str]:
+        return []
+
+
 class ServerManager:
     def __init__(self, specs: list[ServerSpec]):
         self._specs = specs

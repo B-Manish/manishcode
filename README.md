@@ -62,6 +62,7 @@ uv run python -m mcp_client --config config.json
 | `--max-tool-result CHARS` | Trim any single tool result to this many chars before sending it to the model, so one big file (a 33 KB README, a directory tree, an API dump) can't overflow a small local context window. Default 8000; `0` = unlimited. `--debug` still logs the full result. |
 | `--history FILE` | Load conversation from `FILE` at startup and save back after every turn. |
 | `--list-servers` | Print the servers defined in the config and exit. |
+| `--no-tools` | Plain chat: start no MCP servers, give the model no tools (and no tool-related system prompt). Ignores `--server` / `--server-cmd` / `--config`. `--history`, `--think`, `--context` still work. |
 
 ### In-session commands
 
@@ -88,6 +89,12 @@ One-off server without a config:
 
 ```
 uv run mcp-ollama --server-cmd "npx -y @modelcontextprotocol/server-filesystem C:\Users\me\Documents"
+```
+
+Plain chat, no tools at all:
+
+```
+uv run mcp-ollama --no-tools --model qwen3:8b
 ```
 
 Resume a saved conversation with debug logging:

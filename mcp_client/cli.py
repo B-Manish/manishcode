@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .chat import (
     DEFAULT_MAX_TOOL_RESULT,
+    DEFAULT_SYSTEM_PROMPT,
     ChatError,
     ChatSession,
     is_risky_tool,
@@ -25,7 +26,7 @@ from .config import (
 )
 from .debug import set_debug
 from .history import load_history, save_history
-from .servers import ServerManager
+from .servers import NullServerManager, ServerManager
 
 
 def _force_utf8_console() -> None:
@@ -104,6 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list servers defined in the config and exit",
     )
+    p.add_argument(
+        "--no-tools",
+        action="store_true",
+        help="plain chat: start no MCP servers and give the model no tools "
+        "(ignores --server / --server-cmd / --config)",
+    )
     return p
 
 
@@ -167,8 +174,9 @@ async def run(args) -> int:
             print(f"{name}: {spec.display_cmd}")
         return 0
 
-    specs = resolve_specs(args)
-    print(f"Starting {len(specs)} MCP server(s)...")
+    if not args.no_tools:
+        specs = resolve_specs(args)
+        print(f"Starting {len(specs)} MCP server(s)...")
 
     history_path = Path(args.history).expanduser() if args.history else None
     initial_messages = []
@@ -189,33 +197,46 @@ async def run(args) -> int:
             except OSError as e:
                 print(f"[warn] could not save history: {e}")
 
-    try:
-        async with ServerManager(specs) as manager:
-            print(f"\n{len(manager.ollama_tools)} tool(s) available:")
-            print(manager.describe_tools())
-
-            try:
-                session = ChatSession(
-                    manager,
-                    model=args.model,
-                    think=args.think,
-                    messages=initial_messages,
-                    on_change=on_change if history_path else None,
-                    max_tool_result=args.max_tool_result,
-                    confirm=confirm_cb,
-                )
-            except ChatError as e:
-                print(f"\nERROR: {e}")
-                return 1
-
-            print(
-                f"\nModel: {args.model}  think={args.think}  debug={args.debug}  "
-                f"max-tool-result={args.max_tool_result or 'unlimited'}  "
-                f"confirm-tools={args.confirm_tools}  context={args.context:,}\n"
-                "Type your message. Commands: /quit, /reset, /tools, /context, /save FILE\n"
+    def start_session(manager) -> ChatSession | None:
+        print(f"\n{len(manager.ollama_tools)} tool(s) available:")
+        print(manager.describe_tools())
+        try:
+            sess = ChatSession(
+                manager,
+                model=args.model,
+                think=args.think,
+                messages=initial_messages,
+                on_change=on_change if history_path else None,
+                max_tool_result=args.max_tool_result,
+                confirm=confirm_cb,
+                system_prompt=None if args.no_tools else DEFAULT_SYSTEM_PROMPT,
             )
+        except ChatError as e:
+            print(f"\nERROR: {e}")
+            return None
+        print(
+            f"\nModel: {args.model}  think={args.think}  debug={args.debug}  "
+            f"max-tool-result={args.max_tool_result or 'unlimited'}  "
+            f"confirm-tools={args.confirm_tools}  context={args.context:,}\n"
+            "Type your message. Commands: /quit, /reset, /tools, /context, /save FILE\n"
+        )
+        return sess
+
+    try:
+        if args.no_tools:
+            manager = NullServerManager()
+            session = start_session(manager)
+            if session is None:
+                return 1
             await chat_repl(session, manager, history_path, args.model,
                             context_limit=args.context)
+        else:
+            async with ServerManager(specs) as manager:
+                session = start_session(manager)
+                if session is None:
+                    return 1
+                await chat_repl(session, manager, history_path, args.model,
+                                context_limit=args.context)
     except RuntimeError as e:
         print(f"\nERROR: {e}")
         return 1
