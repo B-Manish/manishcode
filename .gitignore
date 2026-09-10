@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# uv / virtualenv
+.venv/
+venv/
+
+# Local, machine-specific config (copy config.example.json -> config.json)
+config.json
+mcp_config.json
+
+# Secrets — never commit. The Gmail MCP server also reads these from the CWD.
+gcp-oauth.keys.json
+credentials.json
+.gmail-mcp/
+*.pem
+.env
+.env.*
+
+# Saved chat transcripts from --history / /save
+*.history.json
+session*.json
+history*.json
+
+# MCP server scratch output
+.playwright-mcp/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
