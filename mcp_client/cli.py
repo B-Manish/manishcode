@@ -145,7 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="launch an MCP server by raw command instead of using the config "
         "(repeatable). e.g. --server-cmd \"npx -y @modelcontextprotocol/server-filesystem C:\\path\"",
     )
-    p.add_argument("--model", default="qwen3:8b", help="Ollama model (default: qwen3:8b)")
+    p.add_argument("--model", default=None,
+                   help="Ollama model. Default: the model already loaded in "
+                        "`ollama ps`, else the largest installed model that "
+                        "fits ~70%% of this machine's RAM.")
     p.add_argument(
         "--think",
         action="store_true",
@@ -330,6 +333,8 @@ async def run(args) -> int:
             except ChatError as e:
                 print(f"\nERROR: {e}")
                 return 1
+
+            args.model = session.model  # resolve auto-pick for status + history
 
             if use_tui:
                 await run_tui(

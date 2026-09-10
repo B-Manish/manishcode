@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import os
 
 import ollama
 
@@ -91,11 +92,98 @@ def _check_ollama(client: ollama.Client, model: str) -> None:
         )
 
 
+def _gpu_vram_bytes() -> int | None:
+    """Total VRAM of the largest NVIDIA GPU in bytes, or None.
+
+    Uses nvidia-smi (present on any machine with NVIDIA drivers, no pip dep).
+    ponytail: NVIDIA only; AMD/Apple/Intel fall through to the RAM rule.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    mibs = [int(x) for x in out.split() if x.strip().isdigit()]
+    return max(mibs) * 1024 * 1024 if mibs else None
+
+
+def _total_ram_bytes() -> int | None:
+    """Physical RAM in bytes, or None if it can't be determined."""
+    try:  # linux / macOS
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, ValueError, OSError):
+        pass
+    try:  # windows
+        import ctypes
+
+        class _MEMSTAT(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        m = _MEMSTAT()
+        m.dwLength = ctypes.sizeof(m)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+        return int(m.ullTotalPhys) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def pick_model(client: ollama.Client) -> str:
+    """Auto-pick an installed Ollama model that should fit this machine.
+
+    Prefers a model already loaded (`ollama ps`); else the largest installed
+    model whose weights fit in ~80% of GPU VRAM (for full GPU offload), or
+    ~70% of physical RAM when there's no GPU; else the smallest installed
+    model.
+    """
+    try:
+        loaded = client.ps().models
+    except Exception:  # noqa: BLE001
+        loaded = []
+    if loaded:
+        return loaded[0].model
+
+    try:
+        installed = [m for m in client.list().models if m.size]
+    except Exception as e:  # noqa: BLE001
+        raise ChatError(
+            f"cannot reach Ollama ({e}). Is `ollama serve` running?"
+        ) from e
+    if not installed:
+        raise ChatError(
+            "no Ollama models installed. Pull one with `ollama pull qwen3:8b`."
+        )
+
+    installed.sort(key=lambda m: m.size)
+    vram = _gpu_vram_bytes()
+    budget = vram * 0.8 if vram else (_total_ram_bytes() or 0) * 0.7
+    if budget:
+        fits = [m for m in installed if m.size <= budget]
+        if fits:
+            return fits[-1].model
+    return installed[0].model
+
+
 class ChatSession:
     def __init__(
         self,
         manager: ServerManager,
-        model: str,
+        model: str | None = None,
         think: bool = False,
         messages: list | None = None,
         on_change=None,
@@ -105,7 +193,6 @@ class ChatSession:
         ui=None,
     ):
         self.manager = manager
-        self.model = model
         self.think = think
         self.ui = ui or PlainUI()
         # confirm(name, args) -> awaitable[bool]; return False to skip the call.
@@ -117,13 +204,14 @@ class ChatSession:
         ):
             self.messages.insert(0, {"role": "system", "content": system_prompt})
         self.client = ollama.Client()
+        self.model = model or pick_model(self.client)
         self._on_change = on_change
         # Token counts from the most recent Ollama call. prompt_tokens is the
         # whole conversation + system prompt + tool schemas that was fed in, i.e.
         # how much of the context window is currently in use.
         self.prompt_tokens = 0
         self.eval_tokens = 0
-        _check_ollama(self.client, model)
+        _check_ollama(self.client, self.model)
 
     def _changed(self) -> None:
         if self._on_change:
