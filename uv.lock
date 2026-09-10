@@ -323,6 +323,23 @@ wheels = [
 ]
 
 [[package]]
+name = "manishcode"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "mcp" },
+    { name = "ollama" },
+    { name = "prompt-toolkit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mcp", specifier = ">=2.2.0" },
+    { name = "ollama", specifier = ">=0.6.2" },
+    { name = "prompt-toolkit", specifier = ">=3.0" },
+]
+
+[[package]]
 name = "mcp"
 version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -345,23 +362,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/76/31/ac54fb0fdd5b37de704486e288bba4fbbb463f24cfcfedbede407b854513/mcp-2.2.0.tar.gz", hash = "sha256:2dc37ecb1974becdcebdbf7561e7c15a07dbbf20ba21ba16c3593b3038b3afbd", size = 4084129, upload-time = "2026-09-07T16:06:23.439Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1b/ff/8e7eade68b8a28f7da0ed1085544341b51f9c935dbf6b95c76b7edfea6a0/mcp-2.2.0-py3-none-any.whl", hash = "sha256:bde982589473a060ae145e3406e9a5333fe538c97229ba841f5a7f92be004f81", size = 365656, upload-time = "2026-09-07T16:06:19.711Z" },
-]
-
-[[package]]
-name = "mcp-ollama-client"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "mcp" },
-    { name = "ollama" },
-    { name = "prompt-toolkit" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "mcp", specifier = ">=2.2.0" },
-    { name = "ollama", specifier = ">=0.6.2" },
-    { name = "prompt-toolkit", specifier = ">=3.0" },
 ]
 
 [[package]]

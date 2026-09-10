@@ -1,8 +1,8 @@
-# mcp-ollama-client
+# manishcode
 
 A local MCP client: connect to any number of [MCP](https://modelcontextprotocol.io)
 servers and let a **local Ollama model** (default `qwen3:8b`) call their tools.
-No cloud LLM involved.
+No cloud LLM involved. Installed command: **`manishcode`**.
 
 ## What it does
 
@@ -15,36 +15,67 @@ No cloud LLM involved.
 
 ## Setup
 
-### Requirements
+### Requirements (every machine)
 
-- **Python 3.11+**
-- **[uv](https://docs.astral.sh/uv/)** (used here as the package manager)
+- **[uv](https://docs.astral.sh/uv/)** — one line to install:
+  - macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  - Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
+
+  uv also fetches Python 3.11+ for you if you don't have it.
 - **[Ollama](https://ollama.com)** running locally with a tool-capable model pulled:
   ```
-  ollama pull qwen3:8b
+  ollama pull qwen2.5:7b-instruct-q4_0
   ```
-- **Node.js 18+** — only needed for `npx`-based MCP servers (the filesystem,
-  memory, everything, … servers are distributed as npm packages). Check with
-  `node --version`.
+- **Node.js 18+** — for the `npx`-based MCP servers (filesystem, gmail, brave, …).
+  Check with `node --version`.
 
 ### Install
 
+The repo is **private**, so `git` authenticates with *your own* GitHub account
+(GitHub CLI, Git Credential Manager, or an SSH key — you must have been granted
+access to the repo). Then one command:
+
 ```
-uv sync
+uv tool install "git+https://github.com/B-Manish/mcp-client"
 ```
 
-That installs the `mcp` and `ollama` Python packages into `.venv`.
+That puts a `manishcode` command on your PATH. Update later with
+`uv tool upgrade manishcode`; remove with `uv tool uninstall manishcode`.
+
+> Prefer not to install globally? Run it straight from the repo:
+> ```
+> uvx --from "git+https://github.com/B-Manish/mcp-client" manishcode
+> ```
+
+### First run
+
+```
+mkdir my-agent && cd my-agent
+manishcode               # start chatting
+```
+
+On the first run in a folder with no `config.json`, `manishcode` writes a starter
+one for you (`filesystem` scoped to that folder + `duckduckgo` web search) and
+carries on. Edit it to change paths or add servers (see
+[Configuring servers](#configuring-servers)). Run `manishcode init --force` to
+regenerate it from the template.
 
 ## Usage
 
 ```
-uv run mcp-ollama --config config.json
+manishcode --config config.json
 ```
 
-or without installing the entry point:
+(`--config` defaults to `./config.json`, so inside a folder set up by
+`manishcode init` you can just run `manishcode`.)
+
+### Developing on this repo
 
 ```
-uv run python -m mcp_client --config config.json
+git clone https://github.com/B-Manish/mcp-client && cd mcp-client
+uv sync
+uv run manishcode --config config.json      # or: uv run python -m mcp_client ...
+uv run python smoke_test.py
 ```
 
 ### Common flags
@@ -91,19 +122,19 @@ warns you to `/reset`; past ~90% Ollama silently drops the oldest messages (see
 Two servers from the config, thinking mode on:
 
 ```
-uv run mcp-ollama --config config.json --server filesystem --server memory --think
+manishcode --config config.json --server filesystem --server memory --think
 ```
 
 One-off server without a config:
 
 ```
-uv run mcp-ollama --server-cmd "npx -y @modelcontextprotocol/server-filesystem C:\Users\me\Documents"
+manishcode --server-cmd "npx -y @modelcontextprotocol/server-filesystem C:\Users\me\Documents"
 ```
 
 Plain chat, no tools — then pull in a server when you need one:
 
 ```
-uv run mcp-ollama --no-tools --config config.json --model qwen3:8b
+manishcode --no-tools --config config.json --model qwen3:8b
 >>> ...just chat...
 >>> /mcp connect duckduckgo     # now the model can search the web
 >>> /mcp disconnect duckduckgo  # back to plain chat
@@ -112,14 +143,15 @@ uv run mcp-ollama --no-tools --config config.json --model qwen3:8b
 Resume a saved conversation with debug logging:
 
 ```
-uv run mcp-ollama --config config.json --history session.json --debug
+manishcode --config config.json --history session.json --debug
 ```
 
 ## Configuring servers
 
-Create `config.json` (start from `config.example.json`). The `mcpServers` key
-matches the convention used by Claude Desktop, so an existing config often works
-as-is.
+`manishcode init` writes a starter `config.json`; edit it to add servers. (In a
+clone of this repo, `config.example.json` is a fuller starting point.) The
+`mcpServers` key matches the convention used by Claude Desktop, so an existing
+config often works as-is.
 
 ```json
 {
@@ -245,13 +277,13 @@ skipped with a warning (the rest of the session runs normally):
 ```powershell
 # PowerShell — set for the current session, then run
 $env:BRAVE_API_KEY = "your-key-here"
-uv run mcp-ollama --config config.json --server brave-search
+manishcode --config config.json --server brave-search
 ```
 
 Quick check (DuckDuckGo, no key needed):
 
 ```
-uv run mcp-ollama --config config.json --server duckduckgo
+manishcode --config config.json --server duckduckgo
 >>> what's the weather in Hyderabad today
 ```
 
@@ -287,7 +319,7 @@ Read, search, summarise, draft, and send mail from your Gmail account. Uses
 After that the server starts with no further prompts. Then:
 
 ```powershell
-uv run mcp-ollama --config config.json --server gmail --model qwen2.5:7b-instruct-q4_0
+manishcode --config config.json --server gmail --model qwen2.5:7b-instruct-q4_0
 ```
 ```
 >>> summarise my 5 most recent unread emails
@@ -360,7 +392,7 @@ exits non-zero on any failure.
 ### Manual check
 
 ```
-uv run mcp-ollama --server-cmd "npx -y @modelcontextprotocol/server-filesystem ." --debug
+manishcode --server-cmd "npx -y @modelcontextprotocol/server-filesystem ." --debug
 ```
 
 Then try: `list the files in the current directory` — you should see the

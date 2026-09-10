@@ -1,15 +1,21 @@
 [project]
-name = "mcp-ollama-client"
+name = "manishcode"
 version = "0.1.0"
+description = "Chat with a local Ollama model that can call MCP server tools"
+readme = "README.md"
 requires-python = ">=3.11"
+authors = [{ name = "Batchu Manish" }]
 dependencies = [
     "mcp>=2.2.0",
     "ollama>=0.6.2",
     "prompt-toolkit>=3.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/B-Manish/mcp-client"
+
 [project.scripts]
-mcp-ollama = "mcp_client.cli:main"
+manishcode = "mcp_client.cli:main"
 
 [build-system]
 requires = ["hatchling"]

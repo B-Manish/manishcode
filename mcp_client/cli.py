@@ -48,10 +48,50 @@ def _force_utf8_console() -> None:
             pass
 
 
+STARTER_CONFIG = """\
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "duckduckgo": {
+      "command": "uvx",
+      "args": ["duckduckgo-mcp-server"]
+    }
+  }
+}
+"""
+
+
+def _cmd_init(argv: list[str]) -> int:
+    """`manishcode init` - drop a starter config.json in the current folder."""
+    if any(a in ("-h", "--help") for a in argv):
+        print("usage: manishcode init [--force]\n\n"
+              "Write a starter config.json (filesystem + duckduckgo) into the\n"
+              "current folder. --force overwrites an existing one.")
+        return 0
+    force = "--force" in argv or "-f" in argv
+    target = Path.cwd() / "config.json"
+    if target.exists() and not force:
+        print(f"{target} already exists. Use `manishcode init --force` to overwrite.")
+        return 1
+    try:
+        target.write_text(STARTER_CONFIG, encoding="utf-8")
+    except OSError as e:
+        print(f"could not write {target}: {e}")
+        return 1
+    print(f"Wrote {target}")
+    print("  - 'filesystem' is scoped to this folder ('.'); edit the path or add")
+    print("    more servers (see the README), then run:  manishcode")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="mcp-ollama",
+        prog="manishcode",
         description="Chat with a local Ollama model that can call MCP server tools.",
+        epilog="run `manishcode init` first to create a starter config.json",
     )
     p.add_argument("--config", help="path to config.json (default: ./config.json)")
     p.add_argument(
@@ -134,10 +174,19 @@ def resolve_specs(args) -> list[ServerSpec]:
 
     cfg_path = find_config(args.config)
     if cfg_path is None:
-        raise ConfigError(
-            "no config file found (looked for ./config.json). "
-            "Pass --config, or use --server-cmd."
-        )
+        # First run in this folder: create a starter config and use it, rather
+        # than making the user run `manishcode init` separately.
+        cfg_path = Path.cwd() / "config.json"
+        try:
+            cfg_path.write_text(STARTER_CONFIG, encoding="utf-8")
+        except OSError as e:
+            raise ConfigError(
+                f"no config file found and could not create {cfg_path} ({e}). "
+                "Pass --config, or use --server-cmd."
+            ) from e
+        print(f"No config found - wrote a starter one to {cfg_path}")
+        print("  ('filesystem' scoped to this folder + 'duckduckgo' web search; "
+              "edit it to taste)\n")
     all_specs = load_config(cfg_path)
     chosen = select_servers(all_specs, args.servers)
     available = drop_unavailable(chosen)
@@ -470,6 +519,9 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
 
 def main() -> None:
     _force_utf8_console()
+    argv = sys.argv[1:]
+    if argv and argv[0] == "init":
+        sys.exit(_cmd_init(argv[1:]))
     args = build_parser().parse_args()
     try:
         rc = asyncio.run(run(args))
