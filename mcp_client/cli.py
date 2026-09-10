@@ -298,7 +298,7 @@ async def run(args) -> int:
     def on_change(messages):
         if history_path:
             try:
-                save_history(history_path, messages, args.model)
+                save_history(history_path, messages, session.model)
             except OSError as e:
                 print(f"[warn] could not save history: {e}")
 
@@ -363,6 +363,7 @@ SLASH_COMMANDS: list[tuple[tuple[str, ...], str]] = [
     (("/help", "/", "/?"), "show this list of commands"),
     (("/new", "/reset", "/clear"), "start a fresh conversation (clear history)"),
     (("/tools",), "list connected tools and which server owns them"),
+    (("/model", "/model NAME"), "list installed models; /model NAME to switch | /model pull NAME to download"),
     (("/mcp",), "list config servers; /mcp connect NAME | /mcp disconnect NAME"),
     # (works in --no-tools too: start bare, then /mcp connect what you need)
     (("/context",), "show how many tokens the conversation is using"),
@@ -384,6 +385,7 @@ _COMPLETION_ITEMS = [
     ("/reset", "alias for /new"),
     ("/clear", "alias for /new"),
     ("/tools", "list connected tools"),
+    ("/model", "list / switch / pull Ollama models"),
     ("/mcp", "list / connect / disconnect MCP servers"),
     ("/context", "show token usage"),
     ("/save", "write the conversation to a file"),
@@ -502,6 +504,34 @@ async def _handle_mcp(user_input: str, manager, all_specs: dict) -> None:
         print("usage: /mcp [list]  |  /mcp connect NAME  |  /mcp disconnect NAME")
 
 
+async def _handle_model(user_input: str, session: ChatSession) -> None:
+    parts = user_input.split()
+    if len(parts) == 1:
+        for name in session.list_models():
+            mark = "* " if name == session.model else "  "
+            print(f"{mark}{name}")
+        print("  /model NAME to switch  |  /model pull NAME to download")
+        return
+    if parts[1].lower() == "pull" and len(parts) == 3:
+        print(f"pulling {parts[2]!r}... (may take a while)")
+        try:
+            await session.pull_model(parts[2])
+        except ChatError as e:
+            print(f"  [error] {e}")
+            return
+        print(f"  [ok] now using {session.model}")
+        return
+    if len(parts) == 2:
+        try:
+            session.set_model(parts[1])
+        except ChatError as e:
+            print(f"  [error] {e}")
+            return
+        print(f"  now using {session.model}")
+        return
+    print("usage: /model  |  /model NAME  |  /model pull NAME")
+
+
 async def chat_repl(session: ChatSession, manager: ServerManager, history_path, model,
                     context_limit: int = 0, all_specs: dict | None = None, ui=None):
     all_specs = all_specs or {}
@@ -532,6 +562,9 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
             if cmd == "/tools":
                 print(manager.describe_tools())
                 continue
+            if cmd == "/model":
+                await _handle_model(user_input, session)
+                continue
             if cmd == "/mcp":
                 await _handle_mcp(user_input, manager, all_specs)
                 continue
@@ -544,7 +577,7 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
                 if not target:
                     print("usage: /save FILE")
                     continue
-                save_history(target, session.messages, model)
+                save_history(target, session.messages, session.model)
                 print(f"saved to {target}")
                 continue
             print(f"unknown command {cmd!r}. Type / for the list.")

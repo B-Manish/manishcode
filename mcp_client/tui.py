@@ -16,7 +16,8 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.suggester import SuggestFromList
-from textual.widgets import Input, LoadingIndicator, RichLog, Static
+from textual.widgets import Input, LoadingIndicator, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 from .chat import ChatError, ChatSession, is_risky_tool
 from .servers import ServerManager
@@ -31,14 +32,16 @@ COMMANDS: list[tuple[str, str]] = [
     ("/help", "show this list"),
     ("/new", "start a fresh conversation"),
     ("/tools", "list connected tools"),
+    ("/model", "list models; /model NAME to switch | /model pull NAME to download"),
     ("/mcp", "list servers; /mcp connect NAME | /mcp disconnect NAME"),
     ("/context", "show token usage"),
     ("/save FILE", "write the conversation to a file"),
     ("/quit", "leave"),
 ]
 _SUGGEST = SuggestFromList(
-    ["/help", "/new", "/reset", "/clear", "/tools", "/mcp", "/mcp connect ",
-     "/mcp disconnect ", "/context", "/save ", "/quit", "/exit"],
+    ["/help", "/new", "/reset", "/clear", "/tools", "/model", "/model pull ",
+     "/mcp", "/mcp connect ", "/mcp disconnect ", "/context", "/save ",
+     "/quit", "/exit"],
     case_sensitive=False,
 )
 
@@ -64,6 +67,41 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def action_confirm(self, ok: bool) -> None:
         self.dismiss(ok)
+
+
+class ModelScreen(ModalScreen[str | None]):
+    """Arrow-key picker for switching the active Ollama model."""
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, models: list[str], current: str) -> None:
+        super().__init__()
+        self._models = models
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Container(id="model-box"):
+            yield Static(Text("Select model", style="bold"))
+            yield Static(Text("Enter to switch  ·  Esc to cancel  ·  "
+                              "/model pull NAME to download", style="dim"))
+            yield OptionList(*(
+                Option(f"{'✓ ' if m == self._current else '  '}{m}", id=m)
+                for m in self._models
+            ), id="model-list")
+
+    def on_mount(self) -> None:
+        ol = self.query_one(OptionList)
+        if self._current in self._models:
+            ol.highlighted = self._models.index(self._current)
+        ol.focus()
+
+    def on_option_list_option_selected(
+        self, ev: OptionList.OptionSelected
+    ) -> None:
+        self.dismiss(ev.option.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 def _make_confirm(app: "ManishcodeApp", mode: str):
@@ -96,6 +134,10 @@ class ManishcodeApp(App):
     #confirm-box { width: 70%; max-width: 90; padding: 1 2; background: $panel;
                    border: round $warning; }
     #confirm-hint { width: 70%; max-width: 90; padding: 0 2; }
+    ModelScreen { align: center middle; background: $background 60%; }
+    #model-box { width: 70%; max-width: 90; height: auto; max-height: 80%;
+                 padding: 1 2; background: $panel; border: round $accent; }
+    #model-list { height: auto; max-height: 20; background: $panel; }
     """
     BINDINGS = [
         Binding("ctrl+c", "quit", "quit", priority=True),
@@ -112,10 +154,13 @@ class ManishcodeApp(App):
         self.all_specs = all_specs or {}
         self.context_limit = context_limit
         self.history_path = history_path
-        self.model = model
         self._confirm_mode = confirm_mode
         self._working = False
         self._phase = ""
+
+    @property
+    def model(self) -> str:
+        return self.session.model
 
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -256,11 +301,61 @@ class ManishcodeApp(App):
             else:
                 save_history(target, self.session.messages, self.model)
                 log.write(Text(f"saved to {target}", style="dim"))
+        elif cmd == "/model":
+            await self._model(parts)
         elif cmd == "/mcp":
             await self._mcp(parts)
         else:
             log.write(Text(f"unknown command {cmd!r} — /help for the list",
                            style="red"))
+
+    async def _model(self, parts: list[str]) -> None:
+        log = self.query_one(RichLog)
+        if len(parts) == 1:
+            try:
+                names = self.session.list_models()
+            except ChatError as e:
+                log.write(Text(str(e), style="red"))
+                return
+            if not names:
+                log.write(Text("no models installed — /model pull NAME",
+                               style="red"))
+                return
+            choice = await self.push_screen_wait(
+                ModelScreen(names, self.session.model))
+            if not choice or choice == self.session.model:
+                return
+            try:
+                self.session.set_model(choice)
+            except ChatError as e:
+                log.write(Text(f"  err  {e}", style="red"))
+                return
+            log.write(Text(f"  now using {self.session.model}", style="green"))
+            self._refresh_status()
+            return
+        if parts[1].lower() == "pull" and len(parts) == 3:
+            log.write(Text(f"pulling {parts[2]!r}… (may take a while)",
+                           style="dim"))
+            try:
+                await self.session.pull_model(parts[2])
+            except ChatError as e:
+                log.write(Text(f"  err  {e}", style="red"))
+                return
+            log.write(Text(f"  ok  now using {self.session.model}",
+                           style="green"))
+            self._refresh_status()
+            return
+        if len(parts) == 2:
+            try:
+                self.session.set_model(parts[1])
+            except ChatError as e:
+                log.write(Text(f"  err  {e}", style="red"))
+                return
+            log.write(Text(f"  now using {self.session.model}", style="green"))
+            self._refresh_status()
+            return
+        log.write(Text("usage: /model | /model NAME | /model pull NAME",
+                       style="red"))
 
     async def _mcp(self, parts: list[str]) -> None:
         log = self.query_one(RichLog)

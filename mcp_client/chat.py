@@ -213,6 +213,29 @@ class ChatSession:
         self.eval_tokens = 0
         _check_ollama(self.client, self.model)
 
+    def list_models(self) -> list[str]:
+        """Names of all models installed in Ollama."""
+        try:
+            return sorted(m.model for m in self.client.list().models)
+        except Exception as e:  # noqa: BLE001
+            raise ChatError(
+                f"cannot reach Ollama ({e}). Is `ollama serve` running?"
+            ) from e
+
+    def set_model(self, name: str) -> None:
+        """Switch the active model; must already be installed."""
+        _check_ollama(self.client, name)
+        self.model = name
+
+    async def pull_model(self, name: str) -> None:
+        """`ollama pull NAME` (blocking, off the event loop), then switch to it."""
+        call = functools.partial(self.client.pull, name)
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, call)
+        except Exception as e:  # noqa: BLE001
+            raise ChatError(f"pull {name!r} failed: {e}") from e
+        self.model = name
+
     def _changed(self) -> None:
         if self._on_change:
             self._on_change(self.messages)
