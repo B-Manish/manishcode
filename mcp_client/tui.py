@@ -69,6 +69,19 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(ok)
 
 
+class PromptInput(Input):
+    """Input where Tab accepts the ghost-text suggestion (else moves focus)."""
+
+    BINDINGS = [Binding("tab", "complete", "complete", show=False)]
+
+    def action_complete(self) -> None:
+        if self._suggestion and self._suggestion != self.value:
+            self.value = self._suggestion
+            self.cursor_position = len(self.value)
+        else:
+            self.screen.focus_next()
+
+
 class ModelScreen(ModalScreen[str | None]):
     """Arrow-key picker for switching the active Ollama model."""
 
@@ -168,9 +181,9 @@ class ManishcodeApp(App):
         with Container(id="footer"):
             yield LoadingIndicator(id="working")  # CSS keeps it hidden until a turn
             yield Static("", id="status")
-            yield Input(id="prompt",
-                        placeholder="Message the model, or / for commands",
-                        suggester=_SUGGEST)
+            yield PromptInput(id="prompt",
+                              placeholder="Message the model, or / for commands",
+                              suggester=_SUGGEST)
 
     def on_mount(self) -> None:
         self.session._confirm = _make_confirm(self, self._confirm_mode)
