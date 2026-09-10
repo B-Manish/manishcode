@@ -238,7 +238,8 @@ class ManishcodeApp(App):
         if not text or self._working:
             return
         if text.startswith("/"):
-            await self._command(text)
+            # a worker context so commands may open modals (push_screen_wait)
+            self.run_worker(self._command(text), name="command")
             return
         log = self.query_one(RichLog)
         log.write(Rule(style="cyan"))
