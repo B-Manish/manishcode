@@ -35,12 +35,10 @@ tool calls as compact blocks, a spinner while the model thinks). Piped or with
 
 ### Install
 
-The repo is **private**, so `git` authenticates with *your own* GitHub account
-(GitHub CLI, Git Credential Manager, or an SSH key — you must have been granted
-access to the repo). Then one command:
+One command:
 
 ```
-uv tool install "git+https://github.com/B-Manish/mcp-client"
+uv tool install "git+https://github.com/B-Manish/manishcode"
 ```
 
 That puts a `manishcode` command on your PATH. Update later with
@@ -48,7 +46,7 @@ That puts a `manishcode` command on your PATH. Update later with
 
 > Prefer not to install globally? Run it straight from the repo:
 > ```
-> uvx --from "git+https://github.com/B-Manish/mcp-client" manishcode
+> uvx --from "git+https://github.com/B-Manish/manishcode" manishcode
 > ```
 
 ### First run
@@ -76,7 +74,7 @@ manishcode --config config.json
 ### Developing on this repo
 
 ```
-git clone https://github.com/B-Manish/mcp-client && cd mcp-client
+git clone https://github.com/B-Manish/manishcode && cd manishcode
 uv sync
 uv run manishcode --config config.json      # or: uv run python -m mcp_client ...
 uv run python smoke_test.py
