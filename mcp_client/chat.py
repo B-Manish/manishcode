@@ -112,6 +112,11 @@ class ChatSession:
             self.messages.insert(0, {"role": "system", "content": system_prompt})
         self.client = ollama.Client()
         self._on_change = on_change
+        # Token counts from the most recent Ollama call. prompt_tokens is the
+        # whole conversation + system prompt + tool schemas that was fed in, i.e.
+        # how much of the context window is currently in use.
+        self.prompt_tokens = 0
+        self.eval_tokens = 0
         _check_ollama(self.client, model)
 
     def _changed(self) -> None:
@@ -134,7 +139,11 @@ class ChatSession:
             )
         except Exception as e:  # noqa: BLE001
             raise ChatError(f"Ollama chat failed: {e}") from e
-        debug("ollama response", resp.model_dump(exclude_none=True))
+        data = resp.model_dump(exclude_none=True)
+        debug("ollama response", data)
+        if data.get("prompt_eval_count"):
+            self.prompt_tokens = data["prompt_eval_count"]
+        self.eval_tokens = data.get("eval_count", 0)
         msg = resp["message"]
         return msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else dict(msg)
 

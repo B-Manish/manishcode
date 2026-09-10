@@ -58,6 +58,7 @@ uv run python -m mcp_client --config config.json
 | `--think` | Enable the model's thinking/reasoning mode. |
 | `--debug` | Print the full JSON of every Ollama request/response and tool call/result. |
 | `--confirm-tools MODE` | Ask for `y/N` before a tool call runs. `risky` (default) prompts only for side-effecting tools (send mail, trash, write/move files, …); `all` prompts for every call; `none` never prompts. Piped/non-interactive input counts as "no". |
+| `--context TOKENS` | Effective Ollama context window, used only to print a "context used" percentage after each turn (default: `$OLLAMA_CONTEXT_LENGTH` or 4096). Set it to whatever you started `ollama serve` with. |
 | `--max-tool-result CHARS` | Trim any single tool result to this many chars before sending it to the model, so one big file (a 33 KB README, a directory tree, an API dump) can't overflow a small local context window. Default 8000; `0` = unlimited. `--debug` still logs the full result. |
 | `--history FILE` | Load conversation from `FILE` at startup and save back after every turn. |
 | `--list-servers` | Print the servers defined in the config and exit. |
@@ -67,7 +68,13 @@ uv run python -m mcp_client --config config.json
 - `/quit` — exit
 - `/reset` — clear conversation history
 - `/tools` — list connected tools and their server
+- `/context` — show how many prompt tokens the conversation + tools currently use
 - `/save FILE` — write the current conversation to `FILE`
+
+After every turn the client prints a line like
+`[context] 4,210 prompt tokens in use  ~34% of 12,288`. When it passes ~75% it
+warns you to `/reset`; past ~90% Ollama silently drops the oldest messages (see
+[Small context windows](#small-context-windows)).
 
 ### Examples
 

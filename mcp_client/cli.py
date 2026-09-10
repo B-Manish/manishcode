@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -67,6 +68,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="enable the model's thinking/reasoning mode",
     )
     p.add_argument("--debug", action="store_true", help="print full tool-call JSON")
+    p.add_argument(
+        "--context",
+        type=int,
+        default=int(os.environ.get("OLLAMA_CONTEXT_LENGTH") or 4096),
+        metavar="TOKENS",
+        help="effective Ollama context window, used only to show a 'context "
+        "used' percentage after each turn (default: $OLLAMA_CONTEXT_LENGTH or "
+        "4096). Set this to whatever you started `ollama serve` with.",
+    )
     p.add_argument(
         "--confirm-tools",
         choices=("risky", "all", "none"),
@@ -201,10 +211,11 @@ async def run(args) -> int:
             print(
                 f"\nModel: {args.model}  think={args.think}  debug={args.debug}  "
                 f"max-tool-result={args.max_tool_result or 'unlimited'}  "
-                f"confirm-tools={args.confirm_tools}\n"
-                "Type your message. Commands: /quit, /reset, /tools, /save FILE\n"
+                f"confirm-tools={args.confirm_tools}  context={args.context:,}\n"
+                "Type your message. Commands: /quit, /reset, /tools, /context, /save FILE\n"
             )
-            await chat_repl(session, manager, history_path, args.model)
+            await chat_repl(session, manager, history_path, args.model,
+                            context_limit=args.context)
     except RuntimeError as e:
         print(f"\nERROR: {e}")
         return 1
@@ -212,7 +223,25 @@ async def run(args) -> int:
     return 0
 
 
-async def chat_repl(session: ChatSession, manager: ServerManager, history_path, model):
+def _context_line(session: ChatSession, limit: int) -> str:
+    used = session.prompt_tokens
+    if not used:
+        return "[context] no data yet"
+    msg = f"[context] {used:,} prompt tokens in use"
+    if session.eval_tokens:
+        msg += f" (+{session.eval_tokens:,} generated last step)"
+    if limit > 0:
+        pct = used * 100 / limit
+        msg += f"  ~{pct:.0f}% of {limit:,}"
+        if pct >= 90:
+            msg += "  [!] near limit - Ollama will start dropping oldest messages"
+        elif pct >= 75:
+            msg += "  [!] getting full; consider /reset"
+    return msg
+
+
+async def chat_repl(session: ChatSession, manager: ServerManager, history_path, model,
+                    context_limit: int = 0):
     loop = asyncio.get_event_loop()
     while True:
         try:
@@ -232,6 +261,9 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
         if user_input == "/tools":
             print(manager.describe_tools())
             continue
+        if user_input == "/context":
+            print(_context_line(session, context_limit))
+            continue
         if user_input.startswith("/save"):
             parts = user_input.split(maxsplit=1)
             target = Path(parts[1]).expanduser() if len(parts) > 1 else history_path
@@ -249,6 +281,7 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
             continue
 
         print(f"\n{answer}\n")
+        print(_context_line(session, context_limit))
 
         dead = await manager.health_check()
         if dead:
