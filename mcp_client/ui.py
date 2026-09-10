@@ -139,11 +139,13 @@ class TuiUI(PlainUI):
 
     @contextlib.contextmanager
     def thinking(self, label: str = "thinking"):
-        self.app.tui_set_working(True)
+        # The app shows/hides the loading indicator for the whole turn; this
+        # hook just nudges the status label between model / tool phases.
+        self.app.tui_phase(label)
         try:
             yield
         finally:
-            self.app.tui_set_working(False)
+            self.app.tui_phase("")
 
 
 def context_line(session, limit: int) -> str:

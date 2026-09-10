@@ -59,15 +59,24 @@ manishcode               # start chatting
 ```
 
 On the first run in a folder with no `config.json`, `manishcode` writes a starter
-one for you (`filesystem` scoped to that folder + `duckduckgo` web search) and
-carries on. Edit it to change paths or add servers (see
-[Configuring servers](#configuring-servers)). Run `manishcode init --force` to
-regenerate it from the template.
+one (`filesystem` scoped to that folder + `duckduckgo` web search) so `/mcp
+connect` has something to offer. Edit it to add servers (see
+[Configuring servers](#configuring-servers)); `manishcode init --force`
+regenerates it.
+
+**Bare `manishcode` starts with no MCP servers connected** — a local model
+drowns in 80+ tool schemas. Add only what a task needs:
+
+```
+manishcode                       # no tools; then  /mcp connect duckduckgo
+manishcode --server duckduckgo --server gmail
+manishcode --all                 # everything in the config (needs a big context)
+```
 
 ## Usage
 
 ```
-manishcode --config config.json
+manishcode --config config.json --server filesystem
 ```
 
 (`--config` defaults to `./config.json`, so inside a folder set up by
@@ -87,7 +96,8 @@ uv run python smoke_test.py
 | Flag | Meaning |
 |------|---------|
 | `--config FILE` | Path to the JSON config (default: `./config.json`). |
-| `--server NAME` | Connect only to this server from the config. Repeatable. Default: all. |
+| `--server NAME` | Connect to this server from the config at startup. Repeatable. **Default: none** — bare `manishcode` starts with no tools; add them with `/mcp connect` or `--all`. |
+| `-a`, `--all` | Connect to every server in the config at startup. |
 | `--server-cmd "CMD"` | Launch a server by raw command, ignoring the config. Repeatable. |
 | `--model NAME` | Ollama model to use (default `qwen3:8b`). |
 | `--think` | Enable the model's thinking/reasoning mode. |
@@ -98,7 +108,7 @@ uv run python smoke_test.py
 | `--max-tool-result CHARS` | Trim any single tool result to this many chars before sending it to the model, so one big file (a 33 KB README, a directory tree, an API dump) can't overflow a small local context window. Default 8000; `0` = unlimited. `--debug` still logs the full result. |
 | `--history FILE` | Load conversation from `FILE` at startup and save back after every turn. |
 | `--list-servers` | Print the servers defined in the config and exit. |
-| `--no-tools` | Start with **no** MCP servers and no tool-related system prompt — just the model. Ignores `--server` / `--server-cmd`. You can still pull servers in mid-session with `/mcp connect NAME` (needs `--config` for the catalog). `--history`, `--think`, `--context` all work. |
+| `--no-tools` | Pure chat: no servers **and** no tool-oriented system prompt. (Bare `manishcode` also starts no servers, but keeps the prompt so `/mcp connect` works well.) |
 
 ### In-session commands
 
@@ -136,13 +146,13 @@ One-off server without a config:
 manishcode --server-cmd "npx -y @modelcontextprotocol/server-filesystem C:\Users\me\Documents"
 ```
 
-Plain chat, no tools — then pull in a server when you need one:
+Start bare, add a server when you need it:
 
 ```
-manishcode --no-tools --config config.json --model qwen3:8b
+manishcode --model qwen3:8b
 >>> ...just chat...
 >>> /mcp connect duckduckgo     # now the model can search the web
->>> /mcp disconnect duckduckgo  # back to plain chat
+>>> /mcp disconnect duckduckgo  # drop it again, free the context
 ```
 
 Resume a saved conversation with debug logging:

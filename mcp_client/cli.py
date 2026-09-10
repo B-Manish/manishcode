@@ -101,8 +101,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         dest="servers",
         metavar="NAME",
-        help="name of a server from the config to connect to (repeatable; "
-        "default: all servers in the config)",
+        help="connect to this server from the config at startup (repeatable). "
+        "By default nothing is connected - use this, --all, or /mcp connect.",
+    )
+    p.add_argument(
+        "-a", "--all",
+        action="store_true",
+        dest="all_servers",
+        help="connect to every server defined in the config at startup",
     )
     p.add_argument(
         "--server-cmd",
@@ -163,13 +169,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-tools",
         action="store_true",
-        help="plain chat: start no MCP servers and give the model no tools "
-        "(ignores --server / --server-cmd / --config)",
+        help="pure chat: no servers AND no tool-oriented system prompt. "
+        "(bare `manishcode` also starts no servers, but keeps the prompt so "
+        "/mcp connect works well.)",
     )
     return p
 
 
-def resolve_specs(args) -> list[ServerSpec]:
+def resolve_specs(args, all_specs: dict[str, ServerSpec]) -> list[ServerSpec]:
+    """Which servers to start at launch. Bare `manishcode` starts none - the
+    model gets tools only via --server, --all, --server-cmd, or /mcp connect."""
     if args.server_cmds:
         specs = [
             spec_from_cmdline(cmd, name=f"cmd{i+1}")
@@ -178,31 +187,11 @@ def resolve_specs(args) -> list[ServerSpec]:
         if args.servers:
             print("[warn] --server is ignored when --server-cmd is used")
         return specs
-
-    cfg_path = find_config(args.config)
-    if cfg_path is None:
-        # First run in this folder: create a starter config and use it, rather
-        # than making the user run `manishcode init` separately.
-        cfg_path = Path.cwd() / "config.json"
-        try:
-            cfg_path.write_text(STARTER_CONFIG, encoding="utf-8")
-        except OSError as e:
-            raise ConfigError(
-                f"no config file found and could not create {cfg_path} ({e}). "
-                "Pass --config, or use --server-cmd."
-            ) from e
-        print(f"No config found - wrote a starter one to {cfg_path}")
-        print("  ('filesystem' scoped to this folder + 'duckduckgo' web search; "
-              "edit it to taste)\n")
-    all_specs = load_config(cfg_path)
-    chosen = select_servers(all_specs, args.servers)
-    available = drop_unavailable(chosen)
-    if not available:
-        raise ConfigError(
-            "no servers left to start (all selected servers were skipped for "
-            "missing environment variables)"
-        )
-    return available
+    if args.all_servers:
+        return drop_unavailable(list(all_specs.values()))
+    if args.servers:
+        return drop_unavailable(select_servers(all_specs, args.servers))
+    return []
 
 
 def _make_confirm(mode: str):
@@ -241,18 +230,28 @@ async def run(args) -> int:
 
     all_specs: dict[str, ServerSpec] = {}
     cfg_path = find_config(args.config)
+    if cfg_path is None and not args.no_tools and not args.server_cmds:
+        # No config yet: drop a starter one so `/mcp connect` has a catalogue.
+        starter = Path.cwd() / "config.json"
+        try:
+            starter.write_text(STARTER_CONFIG, encoding="utf-8")
+            cfg_path = starter
+            print(f"No config found - wrote a starter {starter}")
+        except OSError:
+            pass
     if cfg_path is not None:
         try:
             all_specs = load_config(cfg_path)
         except ConfigError:
-            pass  # /mcp just won't have a catalog to offer
+            pass
 
-    if args.no_tools:
-        specs: list[ServerSpec] = []
-        print("Starting with no MCP servers (--no-tools). Add one with /mcp connect NAME.")
-    else:
-        specs = resolve_specs(args)
+    specs = [] if args.no_tools else resolve_specs(args, all_specs)
+    if specs:
         print(f"Starting {len(specs)} MCP server(s)...")
+    elif not args.no_tools:
+        catalogue = ", ".join(all_specs) or "none in config"
+        print(f"No MCP servers started. Add tools with  /mcp connect NAME  "
+              f"({catalogue}),\nor start with  --server NAME  /  --all.")
 
     history_path = Path(args.history).expanduser() if args.history else None
     initial_messages = []

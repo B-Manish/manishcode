@@ -179,7 +179,7 @@ async def test_tui() -> None:
             check("modal answer reaches the session", sess.confirmed is True)
             log_text = " ".join(str(s) for s in app.query_one(RichLog).lines)
             check("assistant reply rendered", "fake model" in log_text)
-            check("status shows context after a turn", "ctx 21%" in
+            check("status shows context after a turn", "(21%)" in
                   str(app.query_one("#status").render()))
             app.query_one("#prompt").value = "/quit"
             await pilot.press("enter")

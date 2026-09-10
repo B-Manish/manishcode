@@ -13,9 +13,10 @@ from rich.rule import Rule
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.suggester import SuggestFromList
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, LoadingIndicator, RichLog, Static
 
 from .chat import ChatError, ChatSession, is_risky_tool
 from .servers import ServerManager
@@ -85,8 +86,11 @@ class ManishcodeApp(App):
     CSS = """
     Screen { layout: vertical; background: $surface; }
     #log { height: 1fr; padding: 0 1; background: $surface; scrollbar-size-vertical: 1; }
-    #status { dock: bottom; height: 1; padding: 0 1; background: $panel; color: $text-muted; }
-    #prompt { dock: bottom; border: round $primary; margin: 0 1; background: $panel; }
+    #footer { dock: bottom; height: auto; background: $panel; }
+    #working { height: 1; display: none; color: $accent; background: $panel; }
+    #status { height: 1; padding: 0 1; background: $panel; color: $text-muted; }
+    #prompt { border: round $primary; margin: 0 1; background: $surface; }
+    #prompt:disabled { border: round $warning; }
     #prompt:focus { border: round $accent; }
     ConfirmScreen { align: center middle; background: $background 60%; }
     #confirm-box { width: 70%; max-width: 90; padding: 1 2; background: $panel;
@@ -111,22 +115,31 @@ class ManishcodeApp(App):
         self.model = model
         self._confirm_mode = confirm_mode
         self._working = False
+        self._phase = ""
 
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", wrap=True, markup=False, highlight=False, min_width=20)
-        yield Static("", id="status")
-        yield Input(id="prompt",
-                    placeholder="Message the model, or / for commands",
-                    suggester=_SUGGEST)
+        with Container(id="footer"):
+            yield LoadingIndicator(id="working")  # CSS keeps it hidden until a turn
+            yield Static("", id="status")
+            yield Input(id="prompt",
+                        placeholder="Message the model, or / for commands",
+                        suggester=_SUGGEST)
 
     def on_mount(self) -> None:
         self.session._confirm = _make_confirm(self, self._confirm_mode)
         log = self.query_one(RichLog)
         log.write(Text(BANNER, style="bold cyan"))
+        n = len(self.manager.ollama_tools)
         log.write(Text(
-            f"  {self.model}  ·  {len(self.manager.ollama_tools)} tools  "
-            f"·  / for commands, ctrl+c to quit\n", style="dim"))
+            f"  {Path.cwd()}  ·  ctx {self.context_limit:,}  "
+            f"·  / for commands, ctrl+c to quit", style="dim"))
+        if n == 0:
+            hint = ", ".join(self.all_specs) or "none in config"
+            log.write(Text(f"  no tools loaded - /mcp connect NAME to add "
+                           f"({hint})", style="dim"))
+        log.write(Text(""))
         self._refresh_status()
         self.query_one(Input).focus()
 
@@ -142,6 +155,16 @@ class ManishcodeApp(App):
 
     def tui_set_working(self, working: bool) -> None:
         self._working = working
+        if not working:
+            self._phase = ""
+        try:
+            self.query_one("#working", LoadingIndicator).display = working
+        except Exception:  # noqa: BLE001 - widget may not be mounted yet
+            pass
+        self._refresh_status()
+
+    def tui_phase(self, label: str) -> None:
+        self._phase = label
         self._refresh_status()
 
     # ---------------------------------------------------------- status bar
@@ -150,16 +173,17 @@ class ManishcodeApp(App):
         servers = ", ".join(c.spec.name for c in conns) or "no servers"
         line = Text()
         line.append(f"{self.model}", style="bold")
+        line.append(f"  ·  {len(self.manager.ollama_tools)} tools")
         line.append(f"  ·  {servers}")
-        used = self.session.prompt_tokens
-        if used and self.context_limit:
-            pct = used * 100 // self.context_limit
-            line.append(f"  ·  ctx {pct}%",
-                        style="red" if pct >= 90 else
-                        "yellow" if pct >= 75 else "cyan")
+        lim = self.context_limit
+        if lim:
+            used = getattr(self.session, "prompt_tokens", 0) or 0
+            pct = used * 100 // lim
+            line.append(
+                f"  ·  ctx {used:,}/{lim:,} ({pct}%)",
+                style="red" if pct >= 90 else "yellow" if pct >= 75 else "cyan")
         if self._working:
-            line.append("  ·  working…", style="yellow")
-        line.append(f"   {Path.cwd()}", style="dim")
+            line.append(f"  ·  {self._phase or 'working'}…", style="yellow")
         self.query_one("#status", Static).update(line)
 
     # --------------------------------------------------------------- input
@@ -176,6 +200,7 @@ class ManishcodeApp(App):
         log.write(Text(text, style="bold cyan"))
         log.write(Text(""))
         self.query_one(Input).disabled = True
+        self.tui_set_working(True)
         self.run_worker(self._turn(text), exclusive=True, name="turn")
 
     async def _turn(self, text: str) -> None:
@@ -186,8 +211,7 @@ class ManishcodeApp(App):
             self.tui_write(Text(f"[chat error] {e}  —  keep going or /quit",
                                 style="red"))
         finally:
-            self._working = False
-            self._refresh_status()
+            self.tui_set_working(False)
             inp = self.query_one(Input)
             inp.disabled = False
             inp.focus()
