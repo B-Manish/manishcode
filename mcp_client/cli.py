@@ -163,11 +163,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--context",
         type=int,
-        default=int(os.environ.get("OLLAMA_CONTEXT_LENGTH") or 4096),
+        default=int(os.environ["OLLAMA_CONTEXT_LENGTH"])
+        if os.environ.get("OLLAMA_CONTEXT_LENGTH") else None,
         metavar="TOKENS",
-        help="effective Ollama context window, used only to show a 'context "
-        "used' percentage after each turn (default: $OLLAMA_CONTEXT_LENGTH or "
-        "4096). Set this to whatever you started `ollama serve` with.",
+        help="override the context window used to show a 'context used' "
+        "percentage after each turn. By default this is auto-detected from "
+        "each model's own metadata and updates when you /model switch "
+        "(default: $OLLAMA_CONTEXT_LENGTH if set, else auto-detect).",
     )
     p.add_argument(
         "--confirm-tools",
@@ -329,6 +331,7 @@ async def run(args) -> int:
                     confirm=None if use_tui else confirm_cb,
                     system_prompt=None if args.no_tools else DEFAULT_SYSTEM_PROMPT,
                     ui=ui,
+                    context_length=args.context,
                 )
             except ChatError as e:
                 print(f"\nERROR: {e}")
@@ -339,17 +342,17 @@ async def run(args) -> int:
             if use_tui:
                 await run_tui(
                     session=session, manager=manager, all_specs=all_specs,
-                    context_limit=args.context, history_path=history_path,
+                    history_path=history_path,
                     model=args.model, confirm_mode=args.confirm_tools,
                 )
             else:
                 ui.rule(
                     f"{args.model}  think={args.think}  "
-                    f"confirm-tools={args.confirm_tools}  context={args.context:,}"
+                    f"confirm-tools={args.confirm_tools}  context={session.context_length:,}"
                 )
                 ui.info("Type your message, or / for the list of commands.")
                 await chat_repl(session, manager, history_path, args.model,
-                                context_limit=args.context, all_specs=all_specs,
+                                all_specs=all_specs,
                                 ui=ui)
     except RuntimeError as e:
         print(f"\nERROR: {e}")
@@ -533,7 +536,7 @@ async def _handle_model(user_input: str, session: ChatSession) -> None:
 
 
 async def chat_repl(session: ChatSession, manager: ServerManager, history_path, model,
-                    context_limit: int = 0, all_specs: dict | None = None, ui=None):
+                    all_specs: dict | None = None, ui=None):
     all_specs = all_specs or {}
     ui = ui or make_ui(plain=True)
     read = _make_reader()
@@ -569,7 +572,7 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
                 await _handle_mcp(user_input, manager, all_specs)
                 continue
             if cmd == "/context":
-                print(_context_line(session, context_limit))
+                print(_context_line(session, session.context_length))
                 continue
             if cmd == "/save":
                 parts = user_input.split(maxsplit=1)
@@ -591,7 +594,7 @@ async def chat_repl(session: ChatSession, manager: ServerManager, history_path, 
             continue
 
         ui.assistant(answer)
-        ui.info(_context_line(session, context_limit))
+        ui.info(_context_line(session, session.context_length))
 
         dead = await manager.health_check()
         if dead:

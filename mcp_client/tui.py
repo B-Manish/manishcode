@@ -201,14 +201,13 @@ class ManishcodeApp(App):
     ]
 
     def __init__(self, *, session: ChatSession, manager: ServerManager,
-                 all_specs: dict, context_limit: int, history_path, model: str,
+                 all_specs: dict, history_path, model: str,
                  confirm_mode: str) -> None:
         super().__init__()
         self.session = session
         self.session.ui = TuiUI(self)
         self.manager = manager
         self.all_specs = all_specs or {}
-        self.context_limit = context_limit
         self.history_path = history_path
         self._confirm_mode = confirm_mode
         self._working = False
@@ -217,6 +216,10 @@ class ManishcodeApp(App):
     @property
     def model(self) -> str:
         return self.session.model
+
+    @property
+    def context_limit(self) -> int:
+        return self.session.context_length
 
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -514,11 +517,11 @@ class ManishcodeApp(App):
 
 
 async def run_tui(*, session: ChatSession, manager: ServerManager, all_specs: dict,
-                  context_limit: int, history_path, model: str,
+                  history_path, model: str,
                   confirm_mode: str) -> None:
     app = ManishcodeApp(
         session=session, manager=manager, all_specs=all_specs,
-        context_limit=context_limit, history_path=history_path, model=model,
+        history_path=history_path, model=model,
         confirm_mode=confirm_mode,
     )
     await app.run_async()

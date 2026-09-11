@@ -179,6 +179,24 @@ def pick_model(client: ollama.Client) -> str:
     return installed[0].model
 
 
+DEFAULT_CONTEXT_LENGTH = 4096
+
+
+def _model_context_length(client, model: str, default: int = DEFAULT_CONTEXT_LENGTH) -> int:
+    """Look up a model's trained context window from Ollama's model metadata
+    (e.g. `qwen3.context_length`, `.context_length`). Falls back to `default`
+    if the model isn't found or doesn't report one."""
+    try:
+        info = client.show(model)
+        modelinfo = info.modelinfo or {}
+        for key, val in modelinfo.items():
+            if key.endswith(".context_length"):
+                return int(val)
+    except Exception:  # noqa: BLE001
+        pass
+    return default
+
+
 class ChatSession:
     def __init__(
         self,
@@ -191,6 +209,7 @@ class ChatSession:
         system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
         confirm=None,
         ui=None,
+        context_length: int | None = None,
     ):
         self.manager = manager
         self.think = think
@@ -212,6 +231,12 @@ class ChatSession:
         self.prompt_tokens = 0
         self.eval_tokens = 0
         _check_ollama(self.client, self.model)
+        # `context_length` is a fixed user override (e.g. matches how `ollama
+        # serve` was started); left as None it's auto-detected per model and
+        # re-read every time the model changes.
+        self._context_override = context_length
+        self.context_length = context_length or _model_context_length(
+            self.client, self.model)
 
     def list_models(self) -> list[str]:
         """Names of all models installed in Ollama."""
@@ -226,6 +251,8 @@ class ChatSession:
         """Switch the active model; must already be installed."""
         _check_ollama(self.client, name)
         self.model = name
+        if self._context_override is None:
+            self.context_length = _model_context_length(self.client, name)
 
     async def pull_model(self, name: str) -> None:
         """`ollama pull NAME` (blocking, off the event loop), then switch to it."""
@@ -235,6 +262,8 @@ class ChatSession:
         except Exception as e:  # noqa: BLE001
             raise ChatError(f"pull {name!r} failed: {e}") from e
         self.model = name
+        if self._context_override is None:
+            self.context_length = _model_context_length(self.client, name)
 
     def _changed(self) -> None:
         if self._on_change:
