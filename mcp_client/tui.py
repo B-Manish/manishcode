@@ -230,6 +230,11 @@ class ManishcodeApp(App):
 
     def on_mount(self) -> None:
         self.session._confirm = _make_confirm(self, self._confirm_mode)
+        self._write_banner()
+        self._refresh_status()
+        self.query_one(Input).focus()
+
+    def _write_banner(self) -> None:
         log = self.query_one(RichLog)
         log.write(Text(BANNER, style="bold cyan"))
         n = len(self.manager.ollama_tools)
@@ -241,8 +246,6 @@ class ManishcodeApp(App):
             log.write(Text(f"  no tools loaded - /mcp connect NAME to add "
                            f"({hint})", style="dim"))
         log.write(Text(""))
-        self._refresh_status()
-        self.query_one(Input).focus()
 
     # ------------------------------------------------- hooks used by TuiUI
     def tui_write(self, renderable) -> None:
@@ -342,6 +345,8 @@ class ManishcodeApp(App):
                 m for m in self.session.messages
                 if isinstance(m, dict) and m.get("role") == "system"]
             self.session.prompt_tokens = 0
+            log.clear()
+            self._write_banner()
             log.write(Text("(new conversation)", style="dim"))
             self._refresh_status()
         elif cmd == "/tools":
