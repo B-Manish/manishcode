@@ -85,7 +85,7 @@ STARTER_CONFIG = """\
     },
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--headless"]
+      "args": ["-y", "@playwright/mcp@latest"]
     }
   }
 }
