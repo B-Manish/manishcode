@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
+import re
 
 import ollama
 
@@ -181,6 +182,27 @@ def pick_model(client: ollama.Client) -> str:
 
 DEFAULT_CONTEXT_LENGTH = 4096
 
+_CONTROL_TOKEN_RE = re.compile(r"<\|[^|>]*\|>")
+_FINAL_CHANNEL_RE = re.compile(r"<\|channel\|>\s*final\s*<\|message\|>")
+
+
+def strip_harmony(text: str) -> str:
+    """Drop harmony control tokens that leaked into a message.
+
+    gpt-oss models speak the "harmony" format (``<|channel|>analysis<|message|>
+    ...<|end|>``), which Ollama normally parses into a separate ``thinking``
+    field. A model that emits a malformed extra turn header defeats that parser
+    and the raw markers arrive in ``content``. Keep the final channel's text --
+    or whatever follows the last ``<|message|>`` -- and drop the scaffolding, so
+    neither the user nor the next turn's context sees the internal reasoning."""
+    if not text or "<|" not in text:
+        return text
+    if _FINAL_CHANNEL_RE.search(text):
+        text = _FINAL_CHANNEL_RE.split(text)[-1]
+    elif "<|message|>" in text:
+        text = text.rsplit("<|message|>", 1)[-1]
+    return _CONTROL_TOKEN_RE.sub("", text).strip()
+
 
 def _model_context_length(client, model: str, default: int = DEFAULT_CONTEXT_LENGTH) -> int:
     """Look up a model's trained context window from Ollama's model metadata
@@ -295,7 +317,10 @@ class ChatSession:
             self.prompt_tokens = data["prompt_eval_count"]
         self.eval_tokens = data.get("eval_count", 0)
         msg = resp["message"]
-        return msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else dict(msg)
+        msg = msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else dict(msg)
+        if msg.get("content"):
+            msg["content"] = strip_harmony(msg["content"])
+        return msg
 
     async def send(self, user_input: str) -> str:
         """Run one user turn to completion; return the model's final text."""
@@ -306,6 +331,14 @@ class ChatSession:
             with self.ui.thinking():
                 msg = await self._chat_once()
             self.messages.append(msg)
+
+            # Reasoning models (gpt-oss) return `thinking` whether or not it was
+            # asked for, so showing it costs nothing. Models with a toggleable
+            # mode (qwen3) return it only under --think. Either way, if it's
+            # here it has already been paid for -- so show it.
+            reasoning = (msg.get("thinking") or "").strip()
+            if reasoning:
+                self.ui.reasoning(reasoning)
 
             tool_calls = msg.get("tool_calls") or []
             if not tool_calls:

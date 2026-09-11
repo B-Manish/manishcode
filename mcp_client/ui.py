@@ -30,6 +30,9 @@ class PlainUI:
     def assistant(self, text: str) -> None:
         print(f"\n{text}\n")
 
+    def reasoning(self, text: str) -> None:
+        print(f"  [thinking] {text}")
+
     def tool_call(self, name: str, args: str) -> None:
         print(f"  [tool] {name}({args})")
 
@@ -76,6 +79,10 @@ class RichUI(PlainUI):
         self.console.print(Markdown(text or "_(no response)_"))
         self.console.print()
 
+    def reasoning(self, text: str) -> None:
+        self.console.print(Text("  thinking", style="bold magenta"))
+        self.console.print(Text(text, style="magenta dim"))
+
     def tool_call(self, name: str, args: str) -> None:
         self.console.print(Text.assemble(
             ("  > ", "yellow"), (name, "bold"), (f"({args})", "dim")))
@@ -114,6 +121,10 @@ class TuiUI(PlainUI):
 
     def assistant(self, text: str) -> None:
         self.app.tui_assistant(text)
+
+    def reasoning(self, text: str) -> None:
+        self.app.tui_write(Text("  thinking", style="bold magenta"))
+        self.app.tui_write(Text(text, style="magenta dim"))
 
     def tool_call(self, name: str, args: str) -> None:
         self.app.tui_write(Text.assemble(

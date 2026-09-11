@@ -11,6 +11,7 @@ from pathlib import Path
 from rich.markdown import Markdown
 from rich.rule import Rule
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
@@ -76,6 +77,24 @@ class PromptInput(Input):
     """Input where Tab accepts the ghost-text suggestion (else moves focus)."""
 
     BINDINGS = [Binding("tab", "complete", "complete", show=False)]
+
+    def _on_paste(self, event: events.Paste) -> None:
+        # Input is single-line: its own handler keeps only the first line of a
+        # multi-line paste and drops the rest. Flatten instead so a pasted
+        # prompt survives intact. prevent_default() is required, not just
+        # stop(): Textual dispatches _on_paste to every class in the MRO, and
+        # only _no_default_action breaks that walk. stop() merely halts
+        # bubbling to ancestors, so without this Input's handler runs straight
+        # after this one and inserts the text a second time.
+        if event.text:
+            text = " ".join(event.text.splitlines())
+            selection = self.selection
+            if selection.is_empty:
+                self.insert_text_at_cursor(text)
+            else:
+                self.replace(text, *selection)
+        event.prevent_default()
+        event.stop()
 
     def action_complete(self) -> None:
         if self._suggestion and self._suggestion != self.value:
