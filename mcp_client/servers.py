@@ -14,6 +14,7 @@ server's job queue and awaiting the result via a future.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from dataclasses import dataclass, field
 
 from mcp import ClientSession, StdioServerParameters
@@ -46,6 +47,18 @@ def _result_text(result) -> str:
 
 def _is_error(result) -> bool:
     return bool(getattr(result, "is_error", None) or getattr(result, "isError", None))
+
+
+def _stderr_tail(errlog, limit: int = 800) -> str:
+    """Read back what the server printed to stderr. Textual's alt-screen hides
+    real stderr, so a startup failure (missing creds, bad args, ...) otherwise
+    only surfaces as anyio's generic 'unhandled errors in a TaskGroup'."""
+    try:
+        errlog.seek(0)
+        text = errlog.read().strip()
+    except Exception:  # noqa: BLE001
+        return ""
+    return text[-limit:] if text else ""
 
 
 @dataclass
@@ -152,8 +165,9 @@ class ServerManager:
         params = StdioServerParameters(
             command=conn.spec.command, args=conn.spec.args, env=conn.spec.full_env()
         )
+        errlog = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         try:
-            async with stdio_client(params) as (read, write):
+            async with stdio_client(params, errlog=errlog) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools = (await session.list_tools()).tools
@@ -162,11 +176,13 @@ class ServerManager:
         except Exception as e:  # noqa: BLE001
             conn.alive = False
             if not started.done():
-                started.set_exception(e)
+                tail = _stderr_tail(errlog)
+                started.set_exception(RuntimeError(f"{e}\n{tail}") if tail else e)
             else:
                 debug(f"server {conn.spec.name} exited", str(e))
         finally:
             conn.alive = False
+            errlog.close()
 
     async def _pump(self, conn: Connection, session: ClientSession) -> None:
         stop_wait = asyncio.create_task(self._await_stop(conn))

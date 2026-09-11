@@ -304,6 +304,7 @@ class ChatSession:
             messages=self.messages,
             tools=self.manager.ollama_tools,
             think=self.think,
+            options={"num_ctx": self.context_length},
         )
         try:
             # ollama's client is blocking; keep it off the event loop so a TUI
